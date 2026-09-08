@@ -206,9 +206,17 @@ export async function loadLedgerStatementClient(
   }
 
   for (const wt of walletRes.data ?? []) {
-    if (wt.invoice_id != null) continue;
-    if (!STANDALONE_WALLET_TYPES.has(wt.transaction_type)) continue;
     const inv = wt.invoice_id ? invoiceById.get(wt.invoice_id) : undefined;
+    const isStandalone =
+      wt.invoice_id == null && STANDALONE_WALLET_TYPES.has(wt.transaction_type);
+    // Mirror SQL: keep invoice-linked deductions when the invoice left SOA
+    // (voided/consolidated/…) — wallet money already left and was not restored.
+    const isOrphanInvoiceDeduction =
+      wt.transaction_type === "deduction" &&
+      wt.invoice_id != null &&
+      inv != null &&
+      !isSoaInvoiceStatus(inv.status);
+    if (!isStandalone && !isOrphanInvoiceDeduction) continue;
     events.push({
       row_id: `wt:${wt.id}`,
       event_at: wt.created_at,

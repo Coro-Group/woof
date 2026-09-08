@@ -23,7 +23,6 @@ import { formatAed, roundAed, AED_DECIMAL_DIGITS } from "@/lib/money";
 import { payInvoiceFromWallet } from "@/lib/walletInvoicePayment";
 import { invalidateOwnerStatementQueries } from "@/lib/statementQueryKeys";
 import { deriveOwnerBalances } from "@/lib/ownerBalances";
-import { useLedgerClosing } from "@/hooks/useLedgerClosing";
 import { useStatementOfAccount } from "@/hooks/useStatement";
 import {
   recordExternalInvoicePayment,
@@ -839,11 +838,24 @@ export { useTopUpWallet as useWalletTopUp } from "@/hooks/useWallet";
 export function useOwnerBalances(ownerId: string) {
   const queryClient = useQueryClient();
   const statementQuery = useStatementOfAccount(ownerId);
-  const closingQuery = useLedgerClosing(ownerId);
+  const ownerWalletQuery = useQuery({
+    queryKey: ["owner_wallet", ownerId],
+    enabled: !!ownerId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("owners")
+        .select("wallet_balance")
+        .eq("id", ownerId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+  });
 
   const invoices = statementQuery.data ?? [];
-  const k = closingQuery.data ?? 0;
-  const balances = deriveOwnerBalances(k, invoices);
+  const walletBalance = ownerWalletQuery.data?.wallet_balance ?? 0;
+  // MSH-style net: wallet_balance − open invoice remainders (not ledger K).
+  const balances = deriveOwnerBalances(walletBalance, invoices);
 
   const payAllOutstanding = async (
     performedBy = "bulk_payment",
@@ -898,8 +910,8 @@ export function useOwnerBalances(ownerId: string) {
     balances,
     invoices,
     payAllOutstanding,
-    isLoading: statementQuery.isLoading || closingQuery.isLoading,
-    error: statementQuery.error || closingQuery.error,
+    isLoading: statementQuery.isLoading || ownerWalletQuery.isLoading,
+    error: statementQuery.error || ownerWalletQuery.error,
   };
 }
 

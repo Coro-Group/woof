@@ -45,40 +45,60 @@ export function invoiceRemainingTotal(invoices: StatementRow[]): number {
   );
 }
 
-export function canPayAllFromWallet(k: number, invoiceRemaining: number): boolean {
+/** True when raw wallet cash can cover all open invoice remainders (MSH-style). */
+export function canPayAllFromWalletBalance(
+  walletBalance: number,
+  invoiceRemaining: number,
+): boolean {
   if (invoiceRemaining <= 0) return false;
-  return spendableWalletFromK(k) >= invoiceRemaining;
+  return roundAed(Math.max(0, walletBalance)) >= invoiceRemaining;
+}
+
+/** @deprecated Prefer canPayAllFromWalletBalance — K is no longer the headline balance. */
+export function canPayAllFromWallet(k: number, invoiceRemaining: number): boolean {
+  return canPayAllFromWalletBalance(spendableWalletFromK(k), invoiceRemaining);
 }
 
 export type OwnerBalanceSnapshot = {
-  /** SOA closing K. */
+  /**
+   * MSH-style net position: owners.wallet_balance − open invoice remainders.
+   * Positive = credit ahead; negative = owes. Not ledger closing K.
+   */
   netPosition: number;
+  /** Spendable cash from owners.wallet_balance (max 0). */
   wallet: number;
-  /** max(0, -K) — SOA debt when K is negative. */
+  /** max(0, −netPosition) — shortfall when open invoices exceed wallet. */
   outstandingDebt: number;
   /** Alias for outstandingDebt (admin-essentials naming). */
   outstanding: number;
-  /** Alias for wallet / max(0, K). */
+  /** Alias for wallet — used by pay-from-wallet eligibility UI. */
   combinedWallet: number;
   invoiceRemainingTotal: number;
   canPayAll: boolean;
 };
 
+/**
+ * Headline balances for profile / statement / pay eligibility.
+ * Uses owners.wallet_balance and open-invoice remainders (same formula as
+ * getAccountBalance / MSH Net Position) — not get_ledger_statement closing K.
+ */
 export function deriveOwnerBalances(
-  k: number,
+  walletBalance: number,
   openInvoices: StatementRow[],
 ): OwnerBalanceSnapshot {
   const invoiceRemaining = invoiceRemainingTotal(openInvoices);
-  const wallet = spendableWalletFromK(k);
-  const outstandingDebt = outstandingDebtFromK(k);
+  const wallet = roundAed(Math.max(0, walletBalance));
+  const netPosition = roundAed(walletBalance - invoiceRemaining);
+  /** Net shortfall when wallet cannot cover open invoices (matches |net| when net < 0). */
+  const outstandingDebt = roundAed(Math.max(0, -netPosition));
   return {
-    netPosition: roundAed(k),
+    netPosition,
     wallet,
     outstandingDebt,
     outstanding: outstandingDebt,
     combinedWallet: wallet,
     invoiceRemainingTotal: invoiceRemaining,
-    canPayAll: canPayAllFromWallet(k, invoiceRemaining),
+    canPayAll: canPayAllFromWalletBalance(walletBalance, invoiceRemaining),
   };
 }
 

@@ -308,10 +308,6 @@ export default function OwnerStatementPage() {
                       </p>
                     </div>
                   )}
-                  <p className="mt-2 max-w-xs text-[11px] leading-snug text-muted-foreground md:ml-auto">
-                    Running Ledger reflects historical transaction order; Account Balance (SOA) is
-                    the current live balance and may differ.
-                  </p>
                 </>
               )}
             </div>

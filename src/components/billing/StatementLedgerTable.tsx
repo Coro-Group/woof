@@ -73,7 +73,7 @@ export function exportStatementCsv(
     "Payment Method",
     "Debit (AED)",
     "Credit (AED)",
-    "Running Ledger (AED)",
+    "Balance (AED)",
     "Notes",
   ];
   const lines = rows
@@ -203,11 +203,8 @@ export function StatementLedgerTable({
                 <TableHead className="text-right whitespace-nowrap text-[11px] uppercase tracking-wide">
                   Credit
                 </TableHead>
-                <TableHead
-                  className="text-right whitespace-nowrap text-[11px] uppercase tracking-wide font-semibold"
-                  title="Running Ledger reflects historical transaction order; Account Balance (SOA) is the current live balance and may differ."
-                >
-                  Running Ledger
+                <TableHead className="text-right whitespace-nowrap text-[11px] uppercase tracking-wide font-semibold">
+                  Balance
                 </TableHead>
               </TableRow>
             </TableHeader>

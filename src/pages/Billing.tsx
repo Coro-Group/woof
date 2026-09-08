@@ -977,7 +977,7 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
       {!ownerBalances.isLoading && (
         <Card className="mb-4">
           <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Account balance (SOA)</p>
+            <p className="text-xs uppercase text-muted-foreground">Net Position</p>
             <WalletBalanceDisplay
               accountBalance={ownerBalances.netPosition}
               size="compact"

@@ -281,7 +281,7 @@ export default function OwnerStatementPage() {
 
             <div className="md:text-right">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Account balance (SOA)
+                Net Position
               </p>
               {headerLoading ? (
                 <p className="text-3xl font-bold mt-1">—</p>

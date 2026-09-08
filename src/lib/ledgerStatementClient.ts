@@ -128,6 +128,8 @@ export async function loadLedgerStatementClient(
   for (const p of allPayments) {
     const inv = invoiceById.get(p.invoice_id);
     if (!inv || inv.receipt_only) continue;
+    // Pair with invoice debits: exclude payments on voided/consolidated/cancelled/draft
+    if (!isSoaInvoiceStatus(inv.status)) continue;
     const isWallet = p.payment_method === "wallet";
     events.push({
       row_id: `pay:${p.id}`,

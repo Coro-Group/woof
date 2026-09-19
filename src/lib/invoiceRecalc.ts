@@ -3,19 +3,15 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { deriveInvoiceStatusAfterRecalc } from "@/lib/boardingInvoiceLineUtils";
 import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
+import { amountPaidFromPaymentRows } from "@/lib/amountPaidFromPayments";
 import { roundAed } from "@/lib/money";
 import { invoiceDisplayTotals, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
+
+export { amountPaidFromPaymentRows } from "@/lib/amountPaidFromPayments";
 
 type InvoiceRow = Database["public"]["Tables"]["invoices"]["Row"];
 type LineRow = Database["public"]["Tables"]["invoice_line_items"]["Row"];
 type AdjustmentRow = Database["public"]["Tables"]["billing_adjustments"]["Row"];
-
-const PAYMENT_TX_TYPES = new Set([
-  "cash_payment",
-  "card_payment",
-  "bank_transfer_payment",
-  "deduction",
-]);
 
 const DISCOUNT_ADJUSTMENT_TYPES = new Set([
   "discount_override",
@@ -45,6 +41,22 @@ export function canDeleteInvoiceAdjustments(status: string): boolean {
   return !isInactiveInvoiceStatus(status) && status !== "paid";
 }
 
+/** Shared by invoiceRecalc + boardingInvoiceSync. */
+export async function resolveInvoiceAmountPaid(
+  invoice: Pick<InvoiceRow, "id" | "amount_paid">,
+  client: SupabaseClient<Database> = supabase,
+): Promise<number> {
+  const { data, error } = await client
+    .from("invoice_payments")
+    .select("amount")
+    .eq("invoice_id", invoice.id);
+  if (error) throw error;
+  return amountPaidFromPaymentRows(
+    invoice.amount_paid,
+    (data ?? []).map((r) => Number(r.amount) || 0),
+  );
+}
+
 function totalsFromLines(
   lines: Pick<LineRow, "quantity" | "unit_price">[],
   discountAmount: number,
@@ -56,25 +68,6 @@ function totalsFromLines(
   const grossTotal = Math.max(0, roundAed(subtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
   return { subtotal: roundAed(subtotal), grossTotal, vatAed };
-}
-
-async function effectiveAmountPaid(
-  invoice: InvoiceRow,
-  client: SupabaseClient<Database> = supabase,
-): Promise<number> {
-  const stored = roundAed(invoice.amount_paid ?? 0);
-  const { data, error } = await client
-    .from("wallet_transactions")
-    .select("amount, transaction_type")
-    .eq("invoice_id", invoice.id);
-  if (error) throw error;
-
-  const fromTx = (data ?? []).reduce((sum, row) => {
-    if (!PAYMENT_TX_TYPES.has(row.transaction_type)) return sum;
-    return sum + Math.abs(Number(row.amount) || 0);
-  }, 0);
-
-  return roundAed(Math.max(stored, fromTx));
 }
 
 /** Recompute invoice header totals from line items; preserves discount_amount. */
@@ -97,7 +90,7 @@ export async function recalculateInvoiceTotals(
 
   const discountAmount = roundAed(invoice.discount_amount ?? 0);
   const { subtotal, grossTotal, vatAed } = totalsFromLines(lines ?? [], discountAmount);
-  const amountPaid = await effectiveAmountPaid(invoice, client);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice, client);
   const { grandTotal } = invoiceDisplayTotals({
     total: grossTotal,
     vat_aed: vatAed,
@@ -192,7 +185,7 @@ export async function syncInvoiceDiscountTotals(invoiceId: string): Promise<void
   const discountAmount = roundAed(lineDiscount + adjustmentDiscountTotal(adjustments ?? []));
   const grossTotal = Math.max(0, roundAed(lineSubtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  const amountPaid = await effectiveAmountPaid(invoice);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice);
   const { grandTotal } = invoiceDisplayTotals({ total: grossTotal, vat_aed: vatAed });
   const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
 
@@ -250,7 +243,7 @@ export async function applyInvoiceDiscountAdjustment(
       : roundAed(lineDiscount + adjustmentDiscount);
   const grossTotal = Math.max(0, roundAed(lineSubtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  const amountPaid = await effectiveAmountPaid(invoice);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice);
   const { grandTotal } = invoiceDisplayTotals({ total: grossTotal, vat_aed: vatAed });
   const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
 

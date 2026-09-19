@@ -10,19 +10,12 @@ import {
 import { createBookingInvoice } from "@/lib/bookingUtils";
 import { formatAed, roundAed } from "@/lib/money";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
-import { invoiceAdjustmentDiscountTotal } from "@/lib/invoiceRecalc";
+import { invoiceAdjustmentDiscountTotal, resolveInvoiceAmountPaid } from "@/lib/invoiceRecalc";
 import { invoiceDisplayTotals, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
 
 type InvoiceRow = Database["public"]["Tables"]["invoices"]["Row"];
 type LineRow = Database["public"]["Tables"]["invoice_line_items"]["Row"];
-
-const PAYMENT_TX_TYPES = new Set([
-  "cash_payment",
-  "card_payment",
-  "bank_transfer_payment",
-  "deduction",
-]);
 
 export type SyncBoardingInvoiceResult =
   | { kind: "no_invoice" }
@@ -58,22 +51,6 @@ function totalsFromLineItems(
   const grossTotal = Math.max(0, roundAed(subtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
   return { subtotal: roundAed(subtotal), grossTotal, vatAed };
-}
-
-async function effectiveAmountPaid(invoice: InvoiceRow): Promise<number> {
-  const stored = roundAed(invoice.amount_paid ?? 0);
-  const { data, error } = await getSupabase()
-    .from("wallet_transactions")
-    .select("amount, transaction_type")
-    .eq("invoice_id", invoice.id);
-  if (error) throw error;
-
-  const fromTx = (data ?? []).reduce((sum, row) => {
-    if (!PAYMENT_TX_TYPES.has(row.transaction_type)) return sum;
-    return sum + Math.abs(Number(row.amount) || 0);
-  }, 0);
-
-  return roundAed(Math.max(stored, fromTx));
 }
 
 async function loadBookingForInvoice(bookingId: string) {
@@ -190,7 +167,7 @@ export async function syncBoardingBookingInvoice(
     excludeTypes: ["double_occupancy_discount"],
   });
   const { subtotal, grossTotal, vatAed } = totalsFromLineItems(merged, discountAmount);
-  const amountPaid = await effectiveAmountPaid(invoice);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice, getSupabase());
   const { grandTotal } = invoiceDisplayTotals({
     total: grossTotal,
     vat_aed: vatAed,

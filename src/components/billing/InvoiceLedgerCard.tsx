@@ -260,11 +260,8 @@ export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardPro
                   return (
                     <div key={p.id} className="flex justify-between py-0.5">
                       <span className="text-muted-foreground flex items-center gap-1">
-                        {paymentMethodLabel(p.payment_method)}
-                        <span className="text-muted-foreground">
-                          {" "}
-                          · {format(new Date(p.created_at), "d MMM, HH:mm")}
-                        </span>
+                        Paid via {paymentMethodLabel(p.payment_method)} on{" "}
+                        {format(new Date(p.created_at), "d MMM, HH:mm")}
                         {editable ? (
                           <button
                             type="button"
@@ -293,10 +290,6 @@ export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardPro
                   );
                 })
               : null}
-            <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Payments</span>
-              <span className="tabular-nums text-emerald-700">+ {formatAed(totalPaid)}</span>
-            </div>
             <div className="flex justify-between border-t mt-1 pt-1 font-medium">
               <span>Due on this invoice</span>
               <span

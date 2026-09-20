@@ -688,12 +688,12 @@ function OwnerBillingSection({ ownerId }: { ownerId: string }) {
                   {
                     onSuccess: (data) => {
                       toast.success("Wallet topped up.", {
-                        action: data?.id
+                        action: data?.receipt_id
                           ? {
                               label: "Print receipt",
                               onClick: () =>
                                 window.open(
-                                  `/print/topup-receipt/${data.id}`,
+                                  `/print/topup-receipt/${data.receipt_id}`,
                                   "_blank",
                                   "noopener,noreferrer",
                                 ),
@@ -2264,12 +2264,12 @@ const OwnerProfilePage = () => {
                 {
                   onSuccess: (data) => {
                     toast.success(`AED ${amount.toFixed(2)} added to wallet.`, {
-                      action: data?.id
+                      action: data?.receipt_id
                         ? {
                             label: "Print receipt",
                             onClick: () =>
                               window.open(
-                                `/print/topup-receipt/${data.id}`,
+                                `/print/topup-receipt/${data.receipt_id}`,
                                 "_blank",
                                 "noopener,noreferrer",
                               ),

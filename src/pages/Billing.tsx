@@ -191,13 +191,13 @@ function WalletModal({ open, mode, ownerId, onClose }: WalletModalProps) {
       : `AED ${numAmount.toFixed(2)} deducted from wallet`;
     mutation.mutate(payload, {
       onSuccess: (data) => {
-        if (mode === "topup" && data?.id) {
+                if (mode === "topup" && data?.receipt_id) {
           toast.success(successMsg, {
             action: {
               label: "Print receipt",
               onClick: () =>
                 window.open(
-                  `/print/topup-receipt/${data.id}`,
+                  `/print/topup-receipt/${data.receipt_id}`,
                   "_blank",
                   "noopener,noreferrer",
                 ),

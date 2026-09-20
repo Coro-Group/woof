@@ -9,6 +9,12 @@ type PaymentMethod = Database["public"]["Enums"]["payment_method"];
 
 export type { WalletTransaction };
 
+export type WalletTopupResult = WalletTransaction & {
+  /** wallet_topup_receipts.id — use this for /print/topup-receipt/:receiptId */
+  receipt_id: string;
+  receipt_number: string | null;
+};
+
 type CreditWalletTopupRpcResult = {
   success: boolean;
   wallet_transaction_id: string;
@@ -27,6 +33,9 @@ export const walletQueryKeys = {
   topupReceipts: (ownerId: string) => ["wallet-topup-receipts", ownerId] as const,
   ownerBalance: (ownerId: string) => ["owners", ownerId, "balance"] as const,
 };
+
+export type WalletTopupReceipt =
+  Database["public"]["Tables"]["wallet_topup_receipts"]["Row"];
 
 // ── Shared mutation payload ───────────────────────────────────────────────────
 
@@ -47,7 +56,7 @@ export type WalletMutationPayload = {
 async function creditWalletTopup(
   payload: WalletMutationPayload,
   transaction_type: "top_up" | "manual_topup",
-): Promise<WalletTransaction> {
+): Promise<WalletTopupResult> {
   const performedBy = payload.issued_by?.trim() || "reception";
   const amount = Math.abs(payload.amount);
 
@@ -64,7 +73,7 @@ async function creditWalletTopup(
   if (error) throw error;
 
   const result = data as CreditWalletTopupRpcResult | null;
-  if (!result?.wallet_transaction_id) {
+  if (!result?.wallet_transaction_id || !result?.receipt_id) {
     throw new Error("Wallet top-up failed");
   }
 
@@ -84,7 +93,33 @@ async function creditWalletTopup(
     invoice_id: null,
     service_type: null,
     created_at: new Date().toISOString(),
+    receipt_id: result.receipt_id,
+    receipt_number: result.receipt_number,
   };
+}
+
+function seedTopupReceiptCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  variables: WalletMutationPayload,
+  result: WalletTopupResult,
+) {
+  const row: WalletTopupReceipt = {
+    id: result.receipt_id,
+    owner_id: variables.owner_id,
+    wallet_transaction_id: result.id,
+    amount: result.amount,
+    issued_by: result.performed_by?.trim() || "reception",
+    receipt_number: result.receipt_number,
+    issued_at: result.created_at,
+    notes: variables.notes ?? null,
+  };
+  queryClient.setQueryData<WalletTopupReceipt[]>(
+    walletQueryKeys.topupReceipts(variables.owner_id),
+    (old) => {
+      if (!old) return [row];
+      return [row, ...old.filter((r) => r.id !== row.id)];
+    },
+  );
 }
 
 function invalidateWalletQueries(
@@ -226,9 +261,6 @@ export function useWalletTransactions(ownerId: string) {
 
 // ── useWalletTopupReceipts ────────────────────────────────────────────────────
 
-export type WalletTopupReceipt =
-  Database["public"]["Tables"]["wallet_topup_receipts"]["Row"];
-
 export function useWalletTopupReceipts(ownerId: string) {
   return useQuery({
     queryKey: walletQueryKeys.topupReceipts(ownerId),
@@ -254,7 +286,8 @@ export function useTopUpWallet() {
   return useMutation({
     mutationFn: (payload: WalletMutationPayload) =>
       creditWalletTopup(payload, "top_up"),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
+      seedTopupReceiptCache(queryClient, variables, data);
       invalidateWalletQueries(queryClient, variables.owner_id);
     },
   });
@@ -314,7 +347,8 @@ export function useManualTopUpWallet() {
   return useMutation({
     mutationFn: (payload: WalletMutationPayload) =>
       creditWalletTopup(payload, "manual_topup"),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
+      seedTopupReceiptCache(queryClient, variables, data);
       invalidateWalletQueries(queryClient, variables.owner_id, {
         includeOwnerWallet: true,
       });

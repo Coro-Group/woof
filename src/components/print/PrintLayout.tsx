@@ -5,14 +5,20 @@ export function PrintLayout({
   children,
   imageUrls = [],
   variant = "cards",
+  contentReady = true,
+  contentLoadingLabel = "Loading…",
 }: {
   children: React.ReactNode;
   imageUrls?: Array<string | null | undefined>;
   /** `schedule` uses A4-friendly margins and table-focused print rules (grooming daily schedule). */
   /** `map` uses landscape A4 for kennel map printouts. */
   variant?: "cards" | "schedule" | "map";
+  /** When false, Print stays disabled even if images are ready (e.g. receipt still loading). */
+  contentReady?: boolean;
+  contentLoadingLabel?: string;
 }) {
   const [imagesReady, setImagesReady] = useState(false);
+  const canPrint = imagesReady && contentReady;
 
   const trackedImages = useMemo(() => {
     return Array.from(
@@ -154,7 +160,7 @@ export function PrintLayout({
             }`}
           >
             <div className="flex flex-wrap items-center gap-2">
-              {imagesReady ? (
+              {canPrint ? (
                 <Button type="button" onClick={() => window.print()}>
                   {variant === "schedule"
                     ? "Print schedule"
@@ -164,7 +170,7 @@ export function PrintLayout({
                 </Button>
               ) : (
                 <Button type="button" disabled>
-                  Loading photos...
+                  {!imagesReady ? "Loading photos..." : contentLoadingLabel}
                 </Button>
               )}
               <Button

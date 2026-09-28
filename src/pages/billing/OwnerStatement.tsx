@@ -29,10 +29,6 @@ import {
   exportStatementCsv,
 } from "@/components/billing/StatementLedgerTable";
 import {
-  WalletBalanceDisplay,
-  OutstandingAmountBadge,
-} from "@/components/billing/WalletBalanceDisplay";
-import {
   computePeriodTotals,
   invoiceRemainingTotal,
 } from "@/lib/ownerBalances";
@@ -160,6 +156,7 @@ export default function OwnerStatementPage() {
   const outstandingTotal = useMemo(() => invoiceRemainingTotal(statement), [statement]);
   const periodTotals = useMemo(() => computePeriodTotals(ledger), [ledger]);
   const headerLoading = statementLoading || ownerBalances.isLoading;
+  const closingBalance = periodTotals.closing;
 
   const applyPreset = (preset: StatementDatePreset) => {
     const today = getDubaiTodayDate();
@@ -170,13 +167,6 @@ export default function OwnerStatementPage() {
   const handlePrintStatement = () => {
     window.print();
   };
-
-  const debtAmount =
-    balances.outstandingDebt > 0
-      ? balances.outstandingDebt
-      : outstandingTotal > 0 && balances.netPosition >= 0
-        ? outstandingTotal
-        : 0;
 
   return (
     <>
@@ -283,32 +273,19 @@ export default function OwnerStatementPage() {
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Account balance (SOA)
               </p>
-              {headerLoading ? (
+              {ledgerLoading ? (
                 <p className="text-3xl font-bold mt-1">—</p>
               ) : (
-                <>
-                  <WalletBalanceDisplay
-                    accountBalance={balances.netPosition}
-                    amountClassName={
-                      balances.netPosition < 0 ? "text-red-600 dark:text-red-400" : undefined
-                    }
-                    className="md:flex md:flex-col md:items-end"
-                  />
-                  {balances.netPosition >= 0 && outstandingTotal > 0 && (
-                    <OutstandingAmountBadge
-                      amount={outstandingTotal}
-                      className="md:ml-auto"
-                    />
+                <p
+                  className={cn(
+                    "text-3xl font-bold mt-1 tabular-nums",
+                    closingBalance < 0 && "text-red-600 dark:text-red-400",
                   )}
-                  {debtAmount > 0 && balances.netPosition < 0 && (
-                    <div className="mt-3 md:ml-auto md:inline-block md:text-right">
-                      <p className="text-xs text-muted-foreground">Outstanding (debt)</p>
-                      <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">
-                        {formatWalletAed(debtAmount)}
-                      </p>
-                    </div>
-                  )}
-                </>
+                >
+                  {closingBalance < 0
+                    ? `- ${formatWalletAed(Math.abs(closingBalance))}`
+                    : formatWalletAed(closingBalance)}
+                </p>
               )}
             </div>
           </CardContent>

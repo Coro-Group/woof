@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import type { LedgerStatementRow } from "@/hooks/useStatement";
-import { isSoaInvoiceStatus } from "@/lib/invoiceStatus";
+import { isLedgerOrphanInvoiceDeduction, isSoaInvoiceStatus } from "@/lib/invoiceStatus";
 import { invoicePaymentMethodToTransactionType } from "@/lib/paymentMethod";
 import { roundAed } from "@/lib/money";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
@@ -209,13 +209,13 @@ export async function loadLedgerStatementClient(
     const inv = wt.invoice_id ? invoiceById.get(wt.invoice_id) : undefined;
     const isStandalone =
       wt.invoice_id == null && STANDALONE_WALLET_TYPES.has(wt.transaction_type);
-    // Mirror SQL: keep invoice-linked deductions when the invoice left SOA
-    // (voided/consolidated/…) — wallet money already left and was not restored.
-    const isOrphanInvoiceDeduction =
-      wt.transaction_type === "deduction" &&
-      wt.invoice_id != null &&
-      inv != null &&
-      !isSoaInvoiceStatus(inv.status);
+    // Mirror SQL: keep deductions only after the invoice was issued and then
+    // left SOA (voided/consolidated/cancelled). Drafts were never issued.
+    const isOrphanInvoiceDeduction = isLedgerOrphanInvoiceDeduction(
+      wt.transaction_type,
+      wt.invoice_id,
+      inv?.status,
+    );
     if (!isStandalone && !isOrphanInvoiceDeduction) continue;
     events.push({
       row_id: `wt:${wt.id}`,

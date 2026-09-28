@@ -20,6 +20,20 @@ export function isSoaInvoiceStatus(status: string): boolean {
   );
 }
 
+/**
+ * Wallet deduction that remains on the SOA after its invoice left it.
+ * Voided, consolidated, and cancelled only — a draft was never issued,
+ * so its deduction must not become standalone ledger debt.
+ */
+export function isLedgerOrphanInvoiceDeduction(
+  transactionType: string,
+  invoiceId: string | null | undefined,
+  invoiceStatus: string | null | undefined,
+): boolean {
+  if (transactionType !== "deduction" || !invoiceId || !invoiceStatus) return false;
+  return isInactiveInvoiceStatus(invoiceStatus);
+}
+
 export function canEditInvoice(status: string): boolean {
   return !isInactiveInvoiceStatus(status) && status !== "paid";
 }

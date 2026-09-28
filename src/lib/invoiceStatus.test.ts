@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   invoiceBalanceDue,
   isInactiveInvoiceStatus,
+  isLedgerOrphanInvoiceDeduction,
   isSoaInvoiceStatus,
   withoutSupersededInvoices,
 } from "@/lib/invoiceStatus";
@@ -16,6 +17,14 @@ describe("invoiceStatus", () => {
     expect(isSoaInvoiceStatus("voided")).toBe(false);
     expect(isSoaInvoiceStatus("outstanding")).toBe(true);
     expect(isSoaInvoiceStatus("paid")).toBe(true);
+  });
+
+  it("does not keep a draft wallet deduction as ledger debt", () => {
+    expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "draft")).toBe(false);
+    expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "paid")).toBe(false);
+    expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "voided")).toBe(true);
+    expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "consolidated")).toBe(true);
+    expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "cancelled")).toBe(true);
   });
 
   it("returns zero balance for consolidated invoices", () => {

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
+import { isInactiveInvoiceStatus, isSoaInvoiceStatus } from "@/lib/invoiceStatus";
 import { isOpenInvoiceStatus } from "@/lib/ownerBalances";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
 import { loadLedgerStatementClient } from "@/lib/ledgerStatementClient";
@@ -93,6 +93,7 @@ async function loadStatementDirect(ownerId: string): Promise<StatementRow[]> {
   }
 
   return (invoicesRes.data ?? [])
+    .filter((r) => isSoaInvoiceStatus(r.status))
     .map((r) => {
       const gross = invoiceDisplayTotals({
         total: r.total,

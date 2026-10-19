@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveWalletChargeAmount, seedInvoicePaymentSplit } from "@/lib/accountBalance";
+import { outstandingInvoiceRemainder, resolveWalletChargeAmount, seedInvoicePaymentSplit } from "@/lib/accountBalance";
 
 describe("seedInvoicePaymentSplit", () => {
   it("caps wallet seed at wallet balance when invoice exceeds wallet", () => {
@@ -29,6 +29,47 @@ describe("seedInvoicePaymentSplit", () => {
     const remaining = 100 - walletSeed - cardEntered;
     expect(walletSeed).toBe(30);
     expect(remaining).toBe(50);
+  });
+});
+
+describe("outstandingInvoiceRemainder", () => {
+  it("grosses up a legacy ex-VAT total and prefers payment rows over amount_paid", () => {
+    expect(
+      outstandingInvoiceRemainder({
+        total: 100,
+        vatAed: null,
+        serviceType: "boarding",
+        notes: null,
+        paymentAmounts: [40],
+        amountPaid: 0,
+      }),
+    ).toBe(65);
+  });
+
+  it("treats a zero payment row as paid zero instead of falling back to amount_paid", () => {
+    expect(
+      outstandingInvoiceRemainder({
+        total: 105,
+        vatAed: 5,
+        serviceType: "boarding",
+        notes: null,
+        paymentAmounts: [0],
+        amountPaid: 105,
+      }),
+    ).toBe(105);
+  });
+
+  it("falls back to amount_paid when there are no payment rows", () => {
+    expect(
+      outstandingInvoiceRemainder({
+        total: 105,
+        vatAed: 5,
+        serviceType: "boarding",
+        notes: null,
+        paymentAmounts: [],
+        amountPaid: 40,
+      }),
+    ).toBe(65);
   });
 });
 

@@ -18,8 +18,6 @@ import {
   useCreateInvoice,
   useCollectPayment,
   useProcessPayment,
-  useVoidInvoice,
-  useCalculateCancellationRefund,
   useOwnerBalances,
   usePricing,
   formatAed,
@@ -50,6 +48,7 @@ import {
 } from "@/lib/bulkWalletPayEligibility";
 import { AddInvoiceLineItemDialog } from "@/components/billing/AddInvoiceLineItemDialog";
 import { DeleteInvoiceLineItemDialog } from "@/components/billing/DeleteInvoiceLineItemDialog";
+import { VoidInvoiceDialog } from "@/components/billing/VoidInvoiceDialog";
 import { InvoiceDeletionLogPanel } from "@/components/billing/InvoiceDeletionLogPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -413,95 +412,6 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
       }}
     />
     </>
-  );
-}
-
-// ── VoidDialog ───────────────────────────────────────────────────────────────
-
-function VoidDialog({ open, invoice, ownerId, onClose }: { open: boolean; invoice: InvoiceWithItems | null; ownerId: string; onClose: () => void }) {
-  const voidInvoice = useVoidInvoice();
-  const [reason, setReason] = useState("");
-  const [staffName, setStaffName] = useState("");
-  const [refundAmount, setRefundAmount] = useState("0");
-
-  const { data: refundCalc } = useCalculateCancellationRefund(
-    ownerId,
-    invoice?.id ?? null,
-    invoice?.created_at ?? null,
-  );
-
-  useEffect(() => {
-    if (refundCalc) setRefundAmount(refundCalc.refundAed.toFixed(2));
-  }, [refundCalc]);
-
-  if (!invoice) return null;
-
-  const handleVoid = async () => {
-    if (!reason.trim()) { toast.error("Enter a reason"); return; }
-    if (!staffName.trim()) { toast.error("Enter staff name"); return; }
-    await voidInvoice.mutateAsync({
-      invoiceId: invoice.id,
-      reason: reason.trim(),
-      refundAmount: parseFloat(refundAmount) || 0,
-      staffName: staffName.trim(),
-    });
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-destructive">
-            <Ban className="h-5 w-5" /> Void Invoice
-          </DialogTitle>
-          <DialogDescription>
-            Invoice {invoice.invoice_number ?? invoice.id.slice(0, 8)} —{" "}
-            {formatAed(
-              invoiceDisplayTotals({
-                total: invoice.total,
-                vat_aed: invoice.vat_aed,
-                service_type: invoice.service_type,
-                notes: invoice.notes,
-              }).grandTotal,
-            )}{" "}
-            incl. VAT
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 mt-2">
-          {refundCalc && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-1">
-              <p className="font-medium text-amber-900">{refundCalc.policyLabel}</p>
-              <p className="text-amber-700">
-                {refundCalc.hoursNotice.toFixed(0)}h notice — {refundCalc.refundPct}% refund = {formatAed(refundCalc.refundAed)}
-              </p>
-              {refundCalc.overrideActive && (
-                <p className="text-amber-800 font-medium">Full refund override active for this owner</p>
-              )}
-            </div>
-          )}
-          <div className="space-y-2">
-            <Label>Refund amount (AED)</Label>
-            <Input type="number" min="0" step="0.01" value={refundAmount} onChange={(e) => setRefundAmount(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label>Reason <span className="text-destructive">*</span></Label>
-            <Textarea rows={2} placeholder="Why is this invoice being voided?" value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label>Approved by <span className="text-destructive">*</span></Label>
-            <Input placeholder="Staff name" value={staffName} onChange={(e) => setStaffName(e.target.value)} />
-          </div>
-        </div>
-        <DialogFooter className="gap-2 pt-4">
-          <Button variant="outline" onClick={onClose} disabled={voidInvoice.isPending}>Cancel</Button>
-          <Button variant="destructive" disabled={voidInvoice.isPending} onClick={handleVoid}>
-            {voidInvoice.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Void Invoice
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -1122,7 +1032,7 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
                   const sb = INVOICE_STATUS_BADGE[inv.status] ?? INVOICE_STATUS_BADGE.draft;
                   const canFinalise = inv.status === "draft";
                   const canPay = ["finalised", "issued", "outstanding", "overdue", "partially_paid"].includes(inv.status);
-                  const canVoid = !["cancelled", "voided", "consolidated", "paid"].includes(inv.status);
+                  const canVoid = !["cancelled", "voided", "consolidated"].includes(inv.status);
                   const canSelect = canConsolidateInvoiceStatus(inv.status);
                   return (
                     <TableRow key={inv.id}>
@@ -1199,7 +1109,17 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
       </Card>
 
       <PaymentDialog open={!!payInvoice} invoice={payInvoice} onClose={() => setPayInvoice(null)} />
-      <VoidDialog open={!!voidInvoice} invoice={voidInvoice} ownerId={ownerId} onClose={() => setVoidInvoice(null)} />
+      <VoidInvoiceDialog
+        open={!!voidInvoice}
+        invoiceId={voidInvoice?.id ?? null}
+        onOpenChange={(open) => {
+          if (!open) setVoidInvoice(null);
+        }}
+        onCompleted={() => {
+          setVoidInvoice(null);
+          void refetchInvoices();
+        }}
+      />
       <InvoiceDetailDialog
         open={!!viewInvoice}
         invoice={viewInvoice}

@@ -4012,7 +4012,7 @@ export type Database = {
         }[]
       }
       revoke_daycare_package_credit: {
-        Args: { p_credit_id: string; p_reason?: string }
+        Args: { p_credit_id: string; p_reason?: string; p_staff?: string }
         Returns: {
           credit_id: string
           invoice_voided: boolean
@@ -4020,6 +4020,10 @@ export type Database = {
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+      void_invoice: {
+        Args: { p_invoice: string; p_reason: string; p_staff: string }
+        Returns: number
+      }
       upsert_peak_period: {
         Args: {
           p_end_date?: string

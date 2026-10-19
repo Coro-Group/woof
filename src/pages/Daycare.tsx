@@ -48,6 +48,7 @@ import {
   type SessionRow,
 } from "@/hooks/useDaycare";
 import { DaycarePackagesTab } from "@/components/daycare/DaycarePackagesTab";
+import { CancelDaycareCheckInDialog } from "@/components/daycare/CancelDaycareCheckInDialog";
 import { DaycareSessionInvoiceLink } from "@/components/daycare/DaycareSessionInvoiceLink";
 import {
   CompleteHourlyBillingDialog,
@@ -113,16 +114,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
   Command,
   CommandEmpty,
@@ -233,14 +224,6 @@ function SessionsTable({ sessions, packageId, packageIsExpired, petId, ownerId, 
       remark:       editDraft.remark     || null,
     }, {
       onSuccess: () => { toast.success("Session updated"); setEditingId(null); },
-      onError:   (err) => toast.error(err.message),
-    });
-  };
-
-  const confirmDelete = () => {
-    if (!deleteId) return;
-    deleteSession.mutate({ sessionId: deleteId, package_id: packageId }, {
-      onSuccess: () => { toast.success("Check-in cancelled"); setDeleteId(null); },
       onError:   (err) => toast.error(err.message),
     });
   };
@@ -593,30 +576,19 @@ function SessionsTable({ sessions, packageId, packageIsExpired, petId, ownerId, 
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirmation */}
-      <AlertDialog open={!!deleteId} onOpenChange={(o) => { if (!o) setDeleteId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Cancel check-in?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Removes this session, restores package credit if used, and voids or deletes any linked
-              invoice so you can check in again with different billing.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteSession.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteSession.isPending}
-              onClick={(e) => { e.preventDefault(); confirmDelete(); }}
-            >
-              {deleteSession.isPending
-                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deleting…</>
-                : "Cancel check-in"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CancelDaycareCheckInDialog
+        open={!!deleteId}
+        sessionId={deleteId}
+        pending={deleteSession.isPending}
+        onOpenChange={(open) => {
+          if (!open) setDeleteId(null);
+        }}
+        onConfirm={async ({ sessionId, reason, staff }) => {
+          await deleteSession.mutateAsync({ sessionId, package_id: packageId, reason, staff });
+          toast.success("Check-in cancelled");
+          setDeleteId(null);
+        }}
+      />
     </>
   );
 }
@@ -2052,40 +2024,19 @@ function DaycareOperationsTab() {
         </CardContent>
       </Card>
 
-      <AlertDialog open={!!cancelSessionId} onOpenChange={(o) => !o && setCancelSessionId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Cancel daycare check-in?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Restores package credit if used and voids or removes linked invoices so you can check in
-              again with different billing.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cancelCheckIn.isPending}>Keep</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={cancelCheckIn.isPending}
-              onClick={(e) => {
-                e.preventDefault();
-                if (!cancelSessionId) return;
-                cancelCheckIn.mutate(cancelSessionId, {
-                  onSuccess: () => {
-                    toast.success("Check-in cancelled");
-                    setCancelSessionId(null);
-                  },
-                  onError: (err) => toast.error(err.message),
-                });
-              }}
-            >
-              {cancelCheckIn.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Cancel check-in
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CancelDaycareCheckInDialog
+        open={!!cancelSessionId}
+        sessionId={cancelSessionId}
+        pending={cancelCheckIn.isPending}
+        onOpenChange={(open) => {
+          if (!open) setCancelSessionId(null);
+        }}
+        onConfirm={async ({ sessionId, reason, staff }) => {
+          await cancelCheckIn.mutateAsync({ sessionId, reason, staff });
+          toast.success("Check-in cancelled");
+          setCancelSessionId(null);
+        }}
+      />
 
       <CompleteHourlyBillingDialog
         open={Boolean(hourlyBillingTarget) && hourlyBillingSessions.length > 0}

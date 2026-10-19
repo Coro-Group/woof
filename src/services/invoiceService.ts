@@ -239,60 +239,6 @@ export async function recordPayment(
 // applyWalletThenExternal removed — use PaymentSplitDialog for wallet-first
 // split payments. recordPayment handles individual legs.
 
-export interface VoidInvoiceParams {
-  invoiceId: string;
-  voidedBy: string;
-  reason: string;
-  /** Discretionary refund note recorded when payments exist on the invoice. */
-  refundNote?: string;
-  refundAmount?: number;
-  client?: Client;
-}
-
-export async function voidInvoice(
-  params: VoidInvoiceParams,
-): Promise<{ success: boolean; error?: string }> {
-  const supabase = params.client ?? defaultClient;
-  const reason = params.reason.trim();
-  if (!reason) return { success: false, error: "A void reason is mandatory." };
-
-  const { data: invoice, error: invErr } = await supabase
-    .from("invoices")
-    .select("id, status, notes")
-    .eq("id", params.invoiceId)
-    .single();
-  if (invErr) return { success: false, error: invErr.message };
-
-  if (invoice.status === "finalised") {
-    return { success: false, error: "Finalised invoices cannot be voided." };
-  }
-  if (invoice.status === "consolidated") {
-    return { success: false, error: "Consolidated invoices cannot be voided." };
-  }
-
-  let notes = invoice.notes ?? "";
-  if (params.refundNote?.trim() || params.refundAmount != null) {
-    const refundLine = `Refund note: ${params.refundNote?.trim() ?? ""}${
-      params.refundAmount != null ? ` (AED ${roundAed(params.refundAmount)})` : ""
-    }`.trim();
-    notes = notes ? `${notes}\n${refundLine}` : refundLine;
-  }
-
-  const { error: updErr } = await supabase
-    .from("invoices")
-    .update({
-      status: "voided",
-      voided_at: new Date().toISOString(),
-      voided_by: params.voidedBy.trim() || "reception",
-      voided_reason: reason,
-      notes,
-    })
-    .eq("id", params.invoiceId);
-
-  if (updErr) return { success: false, error: updErr.message };
-  return { success: true };
-}
-
 export interface AmendInvoiceParams {
   invoiceId: string;
   amendedBy: string;

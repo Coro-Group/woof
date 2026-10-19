@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { format, formatDistanceToNowStrict } from "date-fns";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, ChevronDown, ChevronRight, Lock, Pencil } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,10 +30,9 @@ import {
   INVOICE_PAYMENT_METHOD_OPTIONS,
   type ExternalPaymentMethod,
 } from "@/lib/paymentMethod";
-import { voidInvoice } from "@/services/invoiceService";
 import { useChangePaymentMethod } from "@/hooks/usePayments";
-import { useInvoiceLedger, invoiceLedgerQueryKey } from "@/hooks/useInvoiceLedger";
-import { useAccountBalance, accountBalanceQueryKey } from "@/hooks/useAccountBalance";
+import { useInvoiceLedger } from "@/hooks/useInvoiceLedger";
+import { useAccountBalance } from "@/hooks/useAccountBalance";
 
 const EXTERNAL_METHOD_OPTIONS = INVOICE_PAYMENT_METHOD_OPTIONS.filter(
   (o) => o.value !== "wallet",
@@ -56,17 +54,10 @@ interface InvoiceLedgerCardProps {
 const UNPAID_STATUSES = new Set(["outstanding", "overdue", "partially_paid"]);
 
 export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardProps) {
-  const queryClient = useQueryClient();
   const { data: ledger, isLoading } = useInvoiceLedger(invoiceId);
   const { data: account } = useAccountBalance(ledger?.invoice.owner_id);
 
   const [showAmendments, setShowAmendments] = useState(false);
-  const [voidOpen, setVoidOpen] = useState(false);
-  const [voidReason, setVoidReason] = useState("");
-  const [refundNote, setRefundNote] = useState("");
-  const [refundAmount, setRefundAmount] = useState("");
-  const [voidedBy, setVoidedBy] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
   const changeMethod = useChangePaymentMethod();
   const [editPayment, setEditPayment] = useState<EditablePayment | null>(null);
@@ -97,11 +88,6 @@ export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardPro
   const accountBalance = account?.accountBalance ?? 0;
   const balanceDue = invoiceBalanceDue(invoice.status, charges, totalPaid);
   const invoiceSettled = balanceDue < 0.01;
-  const canVoid =
-    invoice.status !== "finalised" &&
-    invoice.status !== "voided" &&
-    invoice.status !== "consolidated";
-  const hasPayments = payments.length > 0;
 
   // This invoice's contribution to outstanding debt, used to detect whether the
   // owner has *other* unpaid invoices on their account.
@@ -113,34 +99,6 @@ export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardPro
   const hasOtherUnpaid = otherOutstanding > 0.01;
   // Account position before this invoice's unpaid portion is counted.
   const balanceBefore = roundAed(accountBalance + thisOutstanding);
-
-  const handleVoid = async () => {
-    if (!voidReason.trim()) {
-      toast.error("A void reason is mandatory.");
-      return;
-    }
-    setSubmitting(true);
-    const res = await voidInvoice({
-      invoiceId,
-      voidedBy: voidedBy.trim() || "reception",
-      reason: voidReason.trim(),
-      refundNote: refundNote.trim() || undefined,
-      refundAmount: refundAmount ? Number(refundAmount) : undefined,
-    });
-    setSubmitting(false);
-    if (!res.success) {
-      toast.error(res.error ?? "Could not void invoice.");
-      return;
-    }
-    toast.success("Invoice voided successfully");
-    setVoidOpen(false);
-    setVoidReason("");
-    setRefundNote("");
-    setRefundAmount("");
-    queryClient.invalidateQueries({ queryKey: invoiceLedgerQueryKey(invoiceId) });
-    queryClient.invalidateQueries({ queryKey: accountBalanceQueryKey(invoice.owner_id) });
-    onChanged?.();
-  };
 
   return (
     <Card data-testid="invoice-ledger-card">
@@ -357,99 +315,13 @@ export function InvoiceLedgerCard({ invoiceId, onChanged }: InvoiceLedgerCardPro
           </div>
         ) : null}
 
-        {/* Void action (reception) */}
-        {canVoid ? (
-          <div className="pt-2 border-t">
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                setRefundAmount(hasPayments ? String(totalPaid) : "");
-                setVoidOpen(true);
-              }}
-              data-testid="invoice-ledger-void-btn"
-            >
-              Void invoice
-            </Button>
-          </div>
-        ) : invoice.status === "voided" ? (
-          <p className="text-sm text-muted-foreground pt-2 border-t">
-            Voided{invoice.voided_by ? ` by ${invoice.voided_by}` : ""}
-            {invoice.voided_at
-              ? ` on ${format(new Date(invoice.voided_at), "d MMM yyyy, HH:mm")}`
-              : ""}
-            . {invoice.voided_reason ?? ""}
-          </p>
-        ) : invoice.status === "consolidated" ? (
+        {invoice.status === "consolidated" ? (
           <p className="text-sm text-muted-foreground pt-2 border-t">
             This invoice was consolidated into another invoice. Balance due is zero; line items are
             read-only.
           </p>
-        ) : (
-          <p className="text-sm text-muted-foreground pt-2 border-t">
-            Finalised invoices cannot be voided.
-          </p>
-        )}
+        ) : null}
       </CardContent>
-
-      <Dialog open={voidOpen} onOpenChange={setVoidOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Void invoice</DialogTitle>
-            <DialogDescription>
-              Voiding never deletes the invoice. A reason is mandatory and is logged with your name.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm">
-            <div className="space-y-1">
-              <Label>Reason (required)</Label>
-              <Textarea
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="Why is this invoice being voided?"
-                data-testid="invoice-ledger-void-reason"
-              />
-            </div>
-            {hasPayments ? (
-              <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/60 p-3">
-                <p className="text-amber-900 text-xs">
-                  This invoice has recorded payments. Refunds are discretionary — log the amount and
-                  a note if a refund is being granted.
-                </p>
-                <div className="space-y-1">
-                  <Label>Discretionary refund amount (AED)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={refundAmount}
-                    onChange={(e) => setRefundAmount(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Refund note</Label>
-                  <Textarea value={refundNote} onChange={(e) => setRefundNote(e.target.value)} />
-                </div>
-              </div>
-            ) : null}
-            <StaffNameSelect value={voidedBy} onChange={setVoidedBy} label="Voided by" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVoidOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleVoid}
-              disabled={submitting}
-              data-testid="invoice-ledger-void-confirm"
-            >
-              {submitting ? "Voiding…" : "Void invoice"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!editPayment} onOpenChange={(o) => (!o ? setEditPayment(null) : undefined)}>
         <DialogContent data-testid="invoice-ledger-change-method-dialog">

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
-import { cancelDaycareCheckIn } from "@/lib/daycareCancelCheckIn";
+import { cancelDaycareCheckIn, type DaycareCheckInCancelInput } from "@/lib/daycareCancelCheckIn";
 import { appendDogSizeToNotes } from "@/lib/dogSizeNotes";
 import { composeNotesWithBillingPath, isDaycareHourlyPending, isHourlyBillingDraft, parseDaycareBillingPath, parseHourlyDraftId, type DaycareBillingPath } from "@/lib/daycareSessionMeta";
 import { DAYCARE_CREDIT_CODES } from "@/lib/daycareCredits";
@@ -750,17 +750,19 @@ export function useUpdateDaycarePackage() {
 
 export type RevokeDaycarePackageInput = {
   creditId: string;
-  reason?: string;
+  reason: string;
+  staff: string;
 };
 
 export function useDeleteDaycarePackage() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ creditId, reason }: RevokeDaycarePackageInput) => {
+    mutationFn: async ({ creditId, reason, staff }: RevokeDaycarePackageInput) => {
       const { data, error } = await supabase.rpc("revoke_daycare_package_credit", {
         p_credit_id: creditId,
-        p_reason: reason ?? null,
+        p_reason: reason,
+        p_staff: staff,
       });
       if (error) throw error;
       const row = (data as { credit_id: string; invoice_voided: boolean }[] | null)?.[0];
@@ -770,6 +772,10 @@ export function useDeleteDaycarePackage() {
       queryClient.invalidateQueries({ queryKey: ["service_credits"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["daycare_sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["wallet_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["owners"] });
+      queryClient.invalidateQueries({ queryKey: ["account-balance"] });
+      queryClient.invalidateQueries({ queryKey: ["statement"] });
     },
   });
 }
@@ -835,25 +841,29 @@ export function useIssueCustomDaycarePackage() {
 
 // ── useDeleteDaycareSession ───────────────────────────────────────────────────
 
-export type DeleteSessionPayload = {
-  sessionId:  string;
+export type DeleteSessionPayload = DaycareCheckInCancelInput & {
+  sessionId: string;
   package_id?: string | null;
 };
 
 /**
- * Deletes a daycare session by id.
+ * Cancels a daycare check-in: void linked invoices, restore credit, delete the session.
  */
 export function useDeleteDaycareSession() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ sessionId }: DeleteSessionPayload) => {
-      await cancelDaycareCheckIn(sessionId);
+    mutationFn: async ({ sessionId, reason, staff }: DeleteSessionPayload) => {
+      await cancelDaycareCheckIn(sessionId, { reason, staff });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["daycare_sessions"] });
       queryClient.invalidateQueries({ queryKey: ["service_credits"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["wallet_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["owners"] });
+      queryClient.invalidateQueries({ queryKey: ["account-balance"] });
+      queryClient.invalidateQueries({ queryKey: ["statement"] });
     },
   });
 }
@@ -862,13 +872,17 @@ export function useCancelDaycareCheckIn() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (sessionId: string) => {
-      await cancelDaycareCheckIn(sessionId);
+    mutationFn: async ({ sessionId, reason, staff }: DeleteSessionPayload) => {
+      await cancelDaycareCheckIn(sessionId, { reason, staff });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["daycare_sessions"] });
       queryClient.invalidateQueries({ queryKey: ["service_credits"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["wallet_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["owners"] });
+      queryClient.invalidateQueries({ queryKey: ["account-balance"] });
+      queryClient.invalidateQueries({ queryKey: ["statement"] });
     },
   });
 }

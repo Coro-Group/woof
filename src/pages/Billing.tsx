@@ -27,6 +27,7 @@ import {
   type ServiceType,
 } from "@/hooks/useBilling";
 import { invoiceDiscountPercent, invoiceDisplayTotals, vatLineLabel } from "@/lib/vatConfig";
+import { invoiceWalletBalanceDue, invoiceWalletChargeTotal } from "@/lib/invoiceWalletCharge";
 import { formatWalletAed } from "@/lib/money";
 import {
   INVOICE_PAYMENT_METHOD_OPTIONS,
@@ -282,13 +283,17 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
 
   const walletBalance = ownerWalletCredit(owner?.wallet_balance);
 
-  const pay = invoiceDisplayTotals({
-    total: invoice.total,
-    vat_aed: invoice.vat_aed,
-    service_type: invoice.service_type,
-    notes: invoice.notes,
+  const chargeTotal = invoiceWalletChargeTotal({
+    total: invoice.total ?? 0,
+    subtotal: invoice.subtotal ?? 0,
+    discountAmount: invoice.discount_amount ?? 0,
   });
-  const outstanding = Math.max(0, pay.grandTotal - (invoice.amount_paid ?? 0));
+  const outstanding = invoiceWalletBalanceDue({
+    total: invoice.total ?? 0,
+    subtotal: invoice.subtotal ?? 0,
+    discountAmount: invoice.discount_amount ?? 0,
+    amountPaid: invoice.amount_paid ?? 0,
+  });
 
   const submitPayment = async (
     paymentMethod: BillingPaymentMethod = method,
@@ -341,7 +346,7 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div className="rounded-md border p-3 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-muted-foreground">Grand total</span><span>{formatAed(pay.grandTotal)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Grand total</span><span>{formatAed(chargeTotal)}</span></div>
             <div className="flex justify-between font-semibold border-t pt-1"><span>Outstanding</span><span>{formatAed(outstanding)}</span></div>
           </div>
           <div className="space-y-2">

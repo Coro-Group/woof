@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { resolveWalletChargeAmount } from "@/lib/accountBalance";
+import { loadInvoiceWalletBalanceDue } from "@/lib/invoiceWalletBalance";
+import { roundWalletChargeAed } from "@/lib/invoiceWalletCharge";
 import { roundAed } from "@/lib/money";
-import { invoiceAmountDue } from "@/lib/vatConfig";
 import { recordPayment } from "@/services/invoiceService";
 
 /** Float tolerance matching collect_account_payment / ledger settled checks. */
@@ -22,6 +23,9 @@ export type WalletPaymentResult = {
  * Pay an invoice from the owner's wallet via recordPayment — writes
  * invoice_payments + wallet_transactions and lets the DB trigger update status.
  *
+ * The deducted amount is the invoice total after discount, minus anything
+ * already paid. It is never the pre-discount subtotal.
+ *
  * Spendable funds are owners.wallet_balance only (same figure staff see in the
  * wallet modal / Customer Profile). Do not cap with SOA ledger K — K intentionally
  * excludes wallet-payment rows and can be ≤ 0 while the wallet still has credit.
@@ -32,24 +36,31 @@ export async function payInvoiceFromWallet(
 ): Promise<WalletPaymentResult> {
   const { invoiceId, performedBy, amountAed } = params;
 
-  const { data: invoice, error: invErr } = await supabase
-    .from("invoices")
-    .select(
-      "id, owner_id, total, vat_aed, service_type, notes, amount_paid, status",
-    )
-    .eq("id", invoiceId)
-    .single();
-  if (invErr) return { success: false, error: invErr.message };
-
-  const ownerId = invoice.owner_id;
-  const grandTotal = invoiceAmountDue({
-    total: invoice.total,
-    vat_aed: invoice.vat_aed,
-    service_type: invoice.service_type,
-    notes: invoice.notes,
-  });
-  const alreadyPaid = roundAed(invoice.amount_paid ?? 0);
-  const balanceDue = roundAed(Math.max(0, grandTotal - alreadyPaid));
+  let ownerId: string;
+  let balanceDue: number;
+  try {
+    let due = await loadInvoiceWalletBalanceDue(supabase, invoiceId);
+    if (
+      due.storedTotal > due.chargeTotal + 0.01 &&
+      due.amountPaid <= due.chargeTotal + 0.01
+    ) {
+      const { error: syncErr } = await supabase
+        .from("invoices")
+        .update({
+          total: due.chargeTotal,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", invoiceId);
+      if (syncErr) {
+        return { success: false, error: syncErr.message, ownerId: due.ownerId };
+      }
+      due = await loadInvoiceWalletBalanceDue(supabase, invoiceId);
+    }
+    ownerId = due.ownerId;
+    balanceDue = due.balanceDue;
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Could not load invoice." };
+  }
 
   if (balanceDue <= 0) {
     return {
@@ -87,8 +98,7 @@ export async function payInvoiceFromWallet(
     };
   }
 
-  const newAmountPaid = roundAed(alreadyPaid + chargeAmount);
-  const partial = newAmountPaid < grandTotal;
+  const partial = roundWalletChargeAed(chargeAmount) + 0.009 < balanceDue;
 
   // recordPayment owns the wallet deduction (wallet_transactions + balance
   // decrement), the invoice_payments row, and — via the
@@ -117,6 +127,6 @@ export async function payInvoiceFromWallet(
     newWalletBalance,
     ownerId,
     partial: partial || undefined,
-    shortfall: partial ? roundAed(grandTotal - newAmountPaid) : undefined,
+    shortfall: partial ? roundWalletChargeAed(balanceDue - chargeAmount) : undefined,
   };
 }

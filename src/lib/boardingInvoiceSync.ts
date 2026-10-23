@@ -11,6 +11,7 @@ import { createBookingInvoice } from "@/lib/bookingUtils";
 import { formatAed, roundAed } from "@/lib/money";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
 import { invoiceAdjustmentDiscountTotal, resolveInvoiceAmountPaid } from "@/lib/invoiceRecalc";
+import { memberDiscountBesideAdjustments } from "@/lib/invoiceWalletCharge";
 import { invoiceDisplayTotals, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
 
@@ -162,10 +163,16 @@ export async function syncBoardingBookingInvoice(
     .eq("invoice_id", invoice.id);
   if (adjFetchErr) throw adjFetchErr;
 
-  // Do not carry stale invoice.discount_amount; double occupancy is recomputed by RPC below.
-  const discountAmount = invoiceAdjustmentDiscountTotal(adjustmentsBeforeSync ?? [], {
+  // Keep the member discount that lives on the invoice header. Double occupancy
+  // is recomputed by the RPC below and must not replace that header discount.
+  const headerDiscount = roundAed(Math.max(0, Number(invoice.discount_amount) || 0));
+  const adjustmentDiscount = invoiceAdjustmentDiscountTotal(adjustmentsBeforeSync ?? []);
+  const nonOccupancyDiscount = invoiceAdjustmentDiscountTotal(adjustmentsBeforeSync ?? [], {
     excludeTypes: ["double_occupancy_discount"],
   });
+  const discountAmount = roundAed(
+    memberDiscountBesideAdjustments(headerDiscount, adjustmentDiscount) + nonOccupancyDiscount,
+  );
   const { subtotal, grossTotal, vatAed } = totalsFromLineItems(merged, discountAmount);
   const amountPaid = await resolveInvoiceAmountPaid(invoice, getSupabase());
   const { grandTotal } = invoiceDisplayTotals({

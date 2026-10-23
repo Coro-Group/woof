@@ -600,7 +600,9 @@ export function useProcessPayment() {
         });
 
         if (result.success) {
-          if (result.partial) {
+          if ((result.amountCharged ?? 0) <= 0) {
+            toast.success("Invoice already matches the discounted total. Nothing more was charged.");
+          } else if (result.partial) {
             toast.success(
               `${formatAed(result.amountCharged)} deducted from wallet — ${formatAed(result.shortfall ?? 0)} still outstanding`,
             );

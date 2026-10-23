@@ -313,7 +313,9 @@ export default function InvoiceDetailPage() {
     if (!performedBy.trim()) return toast.error("Staff name is required.");
     try {
       const result = await walletPay.mutateAsync({ invoiceId: inv.id, performedBy: performedBy.trim() });
-      if (result.partial) {
+      if ((result.amount_charged ?? 0) <= 0) {
+        toast.success("Invoice already matches the discounted total. Nothing more was charged.");
+      } else if (result.partial) {
         toast.success(`Partial wallet payment recorded — AED ${result.amount_charged?.toFixed(2)} deducted.`);
       } else {
         toast.success("Wallet payment completed.");

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
 import { roundAed } from "@/lib/money";
+import { loadInvoiceWalletBalanceDue } from "@/lib/invoiceWalletBalance";
 import { invoiceAmountDue } from "@/lib/vatConfig";
 import { type PaymentMethod } from "@/lib/paymentMethod";
 import {
@@ -150,10 +151,25 @@ export async function recordPayment(
   params: RecordPaymentParams,
 ): Promise<RecordPaymentResult> {
   const supabase = params.client ?? defaultClient;
-  const amount = roundAed(params.amount);
+  let amount = roundAed(params.amount);
 
   if (!(amount > 0)) {
     return { success: false, error: "Payment amount must be greater than zero." };
+  }
+
+  if (params.method === "wallet" && !params.skipWalletDeduction) {
+    try {
+      const { balanceDue } = await loadInvoiceWalletBalanceDue(supabase, params.invoiceId);
+      amount = roundAed(Math.min(amount, balanceDue));
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Could not load invoice.",
+      };
+    }
+    if (!(amount > 0)) {
+      return { success: false, error: "This invoice has no outstanding balance." };
+    }
   }
 
   const { data: invoice, error: invErr } = await supabase

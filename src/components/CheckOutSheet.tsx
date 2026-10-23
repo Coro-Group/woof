@@ -33,7 +33,7 @@ import { OVERVIEW_ITEM_DESCRIPTION } from "@/components/CheckInSheet";
 import { PaymentSplitDialog } from "@/components/billing/PaymentSplitDialog";
 import { useAccountBalance, accountBalanceQueryKey } from "@/hooks/useAccountBalance";
 import { formatAed } from "@/hooks/useBilling";
-import { invoiceDisplayTotals } from "@/lib/vatConfig";
+import { invoiceWalletBalanceDue } from "@/lib/invoiceWalletCharge";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
 import { syncBoardingRoomAssignmentsAfterDateChange } from "@/lib/boardingRoomAssignmentSync";
 import { supabase } from "@/integrations/supabase/client";
@@ -96,7 +96,7 @@ export function CheckOutSheet({
       const { data: inv } = await withoutSupersededInvoices(
         supabase
           .from("invoices")
-          .select("id, total, vat_aed, service_type, notes, status, amount_paid")
+          .select("id, total, subtotal, discount_amount, vat_aed, service_type, notes, status, amount_paid")
           .eq("booking_id", bookingId)
           .order("created_at", { ascending: false })
           .limit(1)
@@ -110,15 +110,12 @@ export function CheckOutSheet({
   const { data: account } = useAccountBalance(billingOwnerId);
 
   const invoiceRemaining = checkoutInvoice
-    ? Math.max(
-        0,
-        invoiceDisplayTotals({
-          total: checkoutInvoice.total,
-          vat_aed: checkoutInvoice.vat_aed,
-          service_type: checkoutInvoice.service_type,
-          notes: checkoutInvoice.notes,
-        }).grandTotal - (checkoutInvoice.amount_paid ?? 0),
-      )
+    ? invoiceWalletBalanceDue({
+        total: checkoutInvoice.total ?? 0,
+        subtotal: checkoutInvoice.subtotal ?? 0,
+        discountAmount: checkoutInvoice.discount_amount ?? 0,
+        amountPaid: checkoutInvoice.amount_paid ?? 0,
+      })
     : 0;
 
   const [payOpen, setPayOpen] = useState(false);

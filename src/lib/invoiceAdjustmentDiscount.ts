@@ -24,6 +24,47 @@ export function resolveAdjustmentDiscountAmount(
   return roundAed(Math.min(subtotal > 0 ? subtotal : value, value));
 }
 
+/** First percentage in a reason or approval note, such as "(15%)". */
+export function percentInDiscountText(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const match = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!match) return null;
+  const pct = Number(match[1]);
+  if (!Number.isFinite(pct) || pct <= 0) return null;
+  return Math.min(100, pct);
+}
+
+function formatDiscountPercent(percent: number): string {
+  const rounded = Math.round((percent + Number.EPSILON) * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+/** Invoice-detail lines for approved discount overrides. */
+export function describeApprovedDiscountLines(
+  adjustments: Array<{
+    id?: string;
+    adjustment_type: string;
+    adjusted_amount: number | null;
+    reason?: string | null;
+    approved_by?: string | null;
+  }>,
+): Array<{ key: string; label: string; amount: number }> {
+  return adjustments
+    .filter((row) => row.adjustment_type === "discount_override")
+    .map((row, index) => {
+      const amount = Math.round((Math.abs(Number(row.adjusted_amount) || 0) + Number.EPSILON) * 100) / 100;
+      const pct = percentInDiscountText(row.reason) ?? percentInDiscountText(row.approved_by);
+      const approver = row.approved_by?.trim() || "staff";
+      const pctLabel = pct == null ? "" : ` ${formatDiscountPercent(pct)}%`;
+      return {
+        key: row.id ?? `discount-${index}`,
+        label: `Discount${pctLabel} — approved by ${approver}`,
+        amount,
+      };
+    })
+    .filter((row) => row.amount > 0.009);
+}
+
 export function discountReasonWithMode(
   reason: string,
   mode: InvoiceDiscountMode,

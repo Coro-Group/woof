@@ -39,6 +39,7 @@ import { invoiceLineDisplayAmounts, invoiceResolvedAmounts, roundMoney2, vatLine
 import { InvoiceAdjustmentAmountInput } from "@/components/billing/InvoiceAdjustmentAmountInput";
 import { PaymentSplitDialog } from "@/components/billing/PaymentSplitDialog";
 import {
+  describeApprovedDiscountLines,
   discountReasonWithMode,
   type InvoiceDiscountMode,
   isPercentDiscountAdjustmentType,
@@ -135,6 +136,11 @@ export default function InvoiceDetailPage() {
   const { data: linkedDaycareSessions = [] } = useLinkedDaycareSessionsForInvoice(
     isDaycareInvoice ? data?.invoice?.id : undefined,
     isDaycareInvoice ? data?.invoice?.service_id ?? undefined : undefined,
+  );
+
+  const approvedDiscountLines = useMemo(
+    () => describeApprovedDiscountLines(data?.adjustments ?? []),
+    [data?.adjustments],
   );
 
   const computed = useMemo(() => {
@@ -568,6 +574,12 @@ export default function InvoiceDetailPage() {
         <Card>
           <CardContent className="p-5 grid gap-1 text-sm md:max-w-md ml-auto">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{aed(computed.lineSubtotal)}</span></div>
+            {approvedDiscountLines.map((line) => (
+              <div key={line.key} className="flex justify-between gap-3">
+                <span className="text-muted-foreground">{line.label}</span>
+                <span className="tabular-nums">−{aed(line.amount)}</span>
+              </div>
+            ))}
             <div className="flex justify-between"><span className="text-muted-foreground">Total discount</span><span>{aed(computed.totalDiscount)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal (ex VAT)</span><span>{aed(computed.netExVat)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">{vatLineLabel()}</span><span>{aed(computed.vat)}</span></div>

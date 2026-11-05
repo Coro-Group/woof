@@ -3714,6 +3714,10 @@ export type Database = {
         Args: { p_booking_id: string }
         Returns: string
       }
+      reapply_invoice_discount: {
+        Args: { p_amended_by?: string; p_invoice_id: string }
+        Returns: undefined
+      }
       boarding_kennel_occupancy_counts: {
         Args: { p_as_of: string }
         Returns: Json

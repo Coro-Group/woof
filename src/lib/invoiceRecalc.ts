@@ -57,67 +57,21 @@ export async function resolveInvoiceAmountPaid(
   );
 }
 
-function totalsFromLines(
-  lines: Pick<LineRow, "quantity" | "unit_price">[],
-  discountAmount: number,
-): { subtotal: number; grossTotal: number; vatAed: number } {
-  const subtotal = lines.reduce(
-    (s, li) => s + li.unit_price * Math.max(1, li.quantity),
-    0,
-  );
-  const grossTotal = Math.max(0, roundAed(subtotal - discountAmount));
-  const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  return { subtotal: roundAed(subtotal), grossTotal, vatAed };
-}
-
-/** Recompute invoice header totals from line items; preserves discount_amount. */
+/**
+ * Recompute header totals from the current lines without dropping an approved
+ * discount. The database function re-applies a percent to the new subtotal,
+ * keeps a fixed AED discount (capped at the new subtotal), recomputes VAT,
+ * and writes an amendment when the discount amount changes.
+ */
 export async function recalculateInvoiceTotals(
   invoiceId: string,
   client: SupabaseClient<Database> = supabase,
 ): Promise<void> {
-  const { data: invoice, error: invErr } = await client
-    .from("invoices")
-    .select("*")
-    .eq("id", invoiceId)
-    .single();
-  if (invErr) throw invErr;
-
-  const { data: lines, error: linesErr } = await client
-    .from("invoice_line_items")
-    .select("quantity, unit_price")
-    .eq("invoice_id", invoiceId);
-  if (linesErr) throw linesErr;
-
-  const discountAmount = roundAed(invoice.discount_amount ?? 0);
-  const { subtotal, grossTotal, vatAed } = totalsFromLines(lines ?? [], discountAmount);
-  const amountPaid = await resolveInvoiceAmountPaid(invoice, client);
-  const { grandTotal } = invoiceDisplayTotals({
-    total: grossTotal,
-    vat_aed: vatAed,
+  const { error } = await client.rpc("reapply_invoice_discount", {
+    p_invoice_id: invoiceId,
+    p_amended_by: "system",
   });
-  const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
-
-  const updatePayload: Database["public"]["Tables"]["invoices"]["Update"] = {
-    subtotal,
-    total: grossTotal,
-    vat_aed: vatAed,
-    status: status as Database["public"]["Enums"]["invoice_status"],
-    amount_paid: amountPaid,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (status === "paid" && !invoice.paid_at) {
-    updatePayload.paid_at = new Date().toISOString();
-  }
-  if (status !== "paid") {
-    updatePayload.paid_at = null;
-  }
-
-  const { error: updErr } = await client
-    .from("invoices")
-    .update(updatePayload)
-    .eq("id", invoiceId);
-  if (updErr) throw updErr;
+  if (error) throw error;
 }
 
 function lineAmounts(lines: Pick<LineRow, "quantity" | "unit_price" | "total_price" | "line_total">[]) {

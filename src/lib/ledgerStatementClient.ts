@@ -1,7 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import type { LedgerStatementRow } from "@/hooks/useStatement";
-import { isLedgerOrphanInvoiceDeduction, isSoaInvoiceStatus } from "@/lib/invoiceStatus";
+import {
+  isLedgerOrphanInvoiceDeduction,
+  isLedgerVoidedWalletRefund,
+  isSoaInvoiceStatus,
+} from "@/lib/invoiceStatus";
 import { invoicePaymentMethodToTransactionType } from "@/lib/paymentMethod";
 import { roundAed } from "@/lib/money";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
@@ -99,6 +103,11 @@ export async function loadLedgerStatementClient(
   const syntheticPayments = syntheticWalletPaymentsFromDeductions(orphanDeductions);
   const allPayments = [...paymentRows, ...syntheticPayments];
   const invoicesWithPayments = new Set(allPayments.map((p) => p.invoice_id));
+  const invoicesWithWalletDeduction = new Set(
+    (walletRes.data ?? [])
+      .filter((wt) => wt.transaction_type === "deduction" && wt.invoice_id)
+      .map((wt) => wt.invoice_id as string),
+  );
 
   const events: RawEvent[] = [];
 
@@ -216,7 +225,13 @@ export async function loadLedgerStatementClient(
       wt.invoice_id,
       inv?.status,
     );
-    if (!isStandalone && !isOrphanInvoiceDeduction) continue;
+    const isVoidedWalletRefund = isLedgerVoidedWalletRefund(
+      wt.transaction_type,
+      wt.invoice_id,
+      inv?.status,
+      wt.invoice_id != null && invoicesWithWalletDeduction.has(wt.invoice_id),
+    );
+    if (!isStandalone && !isOrphanInvoiceDeduction && !isVoidedWalletRefund) continue;
     events.push({
       row_id: `wt:${wt.id}`,
       event_at: wt.created_at,

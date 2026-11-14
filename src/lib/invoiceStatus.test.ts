@@ -3,6 +3,7 @@ import {
   invoiceBalanceDue,
   isInactiveInvoiceStatus,
   isLedgerOrphanInvoiceDeduction,
+  isLedgerVoidedWalletRefund,
   isSoaInvoiceStatus,
   withoutSupersededInvoices,
 } from "@/lib/invoiceStatus";
@@ -25,6 +26,16 @@ describe("invoiceStatus", () => {
     expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "voided")).toBe(true);
     expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "consolidated")).toBe(true);
     expect(isLedgerOrphanInvoiceDeduction("deduction", "inv-1", "cancelled")).toBe(true);
+  });
+
+  it("includes a refund only when it reverses a voided wallet deduction", () => {
+    expect(isLedgerVoidedWalletRefund("refund", "inv-1", "voided", true)).toBe(true);
+    expect(isLedgerVoidedWalletRefund("refund", "inv-1", "cancelled", true)).toBe(true);
+    expect(isLedgerVoidedWalletRefund("refund", "inv-1", "consolidated", true)).toBe(true);
+    expect(isLedgerVoidedWalletRefund("refund", "inv-1", "voided", false)).toBe(false);
+    expect(isLedgerVoidedWalletRefund("refund", "inv-1", "paid", true)).toBe(false);
+    expect(isLedgerVoidedWalletRefund("refund", null, "voided", true)).toBe(false);
+    expect(isLedgerVoidedWalletRefund("deduction", "inv-1", "voided", true)).toBe(false);
   });
 
   it("returns zero balance for consolidated invoices", () => {

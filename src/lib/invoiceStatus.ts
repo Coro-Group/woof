@@ -34,6 +34,22 @@ export function isLedgerOrphanInvoiceDeduction(
   return isInactiveInvoiceStatus(invoiceStatus);
 }
 
+/**
+ * Refund that puts back a wallet deduction still shown because the invoice
+ * left the statement. A refund with no deduction on that invoice is not the
+ * offset for a posted debit, so it stays off the ledger.
+ */
+export function isLedgerVoidedWalletRefund(
+  transactionType: string,
+  invoiceId: string | null | undefined,
+  invoiceStatus: string | null | undefined,
+  invoiceHasWalletDeduction: boolean,
+): boolean {
+  if (transactionType !== "refund" || !invoiceId || !invoiceHasWalletDeduction) return false;
+  if (!invoiceStatus) return false;
+  return isInactiveInvoiceStatus(invoiceStatus);
+}
+
 export function canEditInvoice(status: string): boolean {
   return !isInactiveInvoiceStatus(status) && status !== "paid";
 }

@@ -15,6 +15,8 @@ import type {
   ManualGroomingAddonAed,
 } from "@/lib/groomingNewAppointmentPricing";
 import {
+  combineGroomingAppointmentQuote,
+  GROOMING_FORM_ADDON_SERVICE_CODE,
   isGroomingPricingCheckbox,
   resolvePrimaryGroomingCheckbox,
 } from "@/lib/groomingNewAppointmentPricing";
@@ -33,19 +35,19 @@ const WOOF_ADDON_LEGACY_KEYS: Partial<Record<GroomingPricingCheckbox, string>> =
   nail_clip: "boarding_addon_nail_clipping",
   teeth_brushing: "boarding_addon_teeth_brushing",
   malaseb_bath: "boarding_addon_malaseb_bath",
-  pawdicure: "boarding_addon_pawdicure",
-  paw_wash: "boarding_addon_paw_wash",
 };
 
 const WOOF_ADDON_SERVICE_CODES: Partial<
   Record<GroomingPricingCheckbox, Database["public"]["Enums"]["service_code"]>
 > = {
   matting_fee: "addon_dematting",
+  ear_cleaning: GROOMING_FORM_ADDON_SERVICE_CODE.ear_cleaning,
+  paw_wash: GROOMING_FORM_ADDON_SERVICE_CODE.paw_wash,
+  pawdicure: GROOMING_FORM_ADDON_SERVICE_CODE.paw_brushing,
 };
 
 const ZERO_AED_CHECKBOXES = new Set<GroomingPricingCheckbox>([
   "fur_brushing",
-  "ear_cleaning",
   "blow_dry",
 ]);
 
@@ -239,9 +241,13 @@ export async function fetchNewGroomingAppointmentPriceBreakdown(
     if (bathAndBlow && key === "blow_dry") continue;
     if (key === "matting_fee" || key === "heavy_dog_fee") continue;
     if (ZERO_AED_CHECKBOXES.has(key)) continue;
-    // Standalone → 52.50 (grooming_gland_expression); with a package → 36.75 add-on.
+    // Standalone glands resolve grooming_gland_expression; beside a package, addon_glands.
     if (key === "gland_expression") {
-      serviceCodes.push(packagePrimary ? "addon_glands" : "grooming_gland_expression");
+      serviceCodes.push(
+        packagePrimary
+          ? GROOMING_FORM_ADDON_SERVICE_CODE.gland_with_package
+          : GROOMING_FORM_ADDON_SERVICE_CODE.gland_standalone,
+      );
       continue;
     }
     const legacy = WOOF_ADDON_LEGACY_KEYS[key];
@@ -268,30 +274,22 @@ export async function fetchNewGroomingAppointmentPriceBreakdown(
     ),
   ]);
 
-  let addonSum = 0;
-  for (const k of legacyKeys) addonSum += legacyPrices.get(k) ?? 0;
-  for (const amount of serviceAmounts) addonSum += amount ?? 0;
+  const addonAmounts: Array<number | null> = [...serviceAmounts];
+  for (const key of legacyKeys) {
+    const amount = legacyPrices.get(key);
+    addonAmounts.push(typeof amount === "number" ? amount : null);
+  }
 
   if (set.has("matting_fee")) {
     const raw = manualAddons?.matting_fee;
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      addonSum += raw;
-    }
+    if (typeof raw === "number" && Number.isFinite(raw)) addonAmounts.push(raw);
   }
   if (set.has("heavy_dog_fee")) {
     const raw = manualAddons?.heavy_dog_fee;
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      addonSum += raw;
-    }
+    if (typeof raw === "number" && Number.isFinite(raw)) addonAmounts.push(raw);
   }
 
-  const roundedBase = Number(base.toFixed(3));
-  const roundedAddons = Number(addonSum.toFixed(3));
-  return {
-    base: roundedBase,
-    addons: roundedAddons,
-    total: Number((roundedBase + roundedAddons).toFixed(3)),
-  };
+  return combineGroomingAppointmentQuote(base, addonAmounts);
 }
 
 export async function fetchNewGroomingAppointmentOriginalAed(

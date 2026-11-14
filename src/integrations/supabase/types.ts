@@ -4329,6 +4329,9 @@ export type Database = {
         | "addon_nails"
         | "addon_glands"
         | "grooming_gland_expression"
+        | "addon_ear_cleaning"
+        | "addon_paw_wash"
+        | "addon_paw_brushing"
         | "addon_dematting"
         | "addon_teeth_cleaning"
         | "addon_flea_tick_bath"
@@ -4646,6 +4649,9 @@ export const Constants = {
         "addon_nails",
         "addon_glands",
         "grooming_gland_expression",
+        "addon_ear_cleaning",
+        "addon_paw_wash",
+        "addon_paw_brushing",
         "addon_dematting",
         "addon_teeth_cleaning",
         "addon_flea_tick_bath",

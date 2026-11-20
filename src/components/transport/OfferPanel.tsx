@@ -30,8 +30,10 @@ export type PanelOffer = {
   outsideWindows?: boolean;
   shiftHours: number;
   eta: string;
-  addedKm: number;
-  addedMinutes: number;
+  /** What the detour costs. null when the quote did not carry it (AE's partner link
+  * sends no km/min today), so nothing prints "0 km / 0 min" as if it were free. */
+  addedKm: number | null;
+  addedMinutes: number | null;
   displaces: number;
   rank?: number;
   recommended?: boolean;
@@ -39,8 +41,8 @@ export type PanelOffer = {
 
 export const VOLTLINES_QUOTE_NOTE = "These times come from Voltlines route data, not a person.";
 
-const km = (n: number | null | undefined) => (n == null ? 0 : Math.round(Number(n) * 10) / 10);
-const mins = (n: number | null | undefined) => (n == null ? 0 : Math.round(Number(n)));
+const km = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n) * 10) / 10);
+const mins = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n)));
 
 /** What the client is told, from what was stored (AE storedToPanelOffers). */
 export function storedToPanelOffers(rows: TransportRequestOffer[]): PanelOffer[] {
@@ -127,7 +129,8 @@ export function OfferList({
               </span>
             </div>
             <p className="text-sm text-muted-foreground">
-              Collected around <span className="font-mono">{o.eta}</span> · costs {o.addedKm} km / {o.addedMinutes} min
+              Collected around <span className="font-mono">{o.eta}</span>
+              {o.addedKm != null && o.addedMinutes != null && ` · costs ${o.addedKm} km / ${o.addedMinutes} min`}
               {o.displaces > 0 && <span className="text-destructive"> · pushes {o.displaces} client(s) out</span>}
             </p>
           </div>

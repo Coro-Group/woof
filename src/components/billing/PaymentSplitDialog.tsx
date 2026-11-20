@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -76,6 +76,8 @@ export function PaymentSplitDialog({
   const [method, setMethod] = useState<ExternalPaymentMethod>("card");
   const [staffName, setStaffName] = useState(defaultStaffName ?? "");
   const [submitting, setSubmitting] = useState(false);
+  /** Sync guard — submitting state alone loses to double-clicks before re-render. */
+  const submittingRef = useRef(false);
   const [duplicatePayment, setDuplicatePayment] = useState<DuplicatePaymentInfo | null>(null);
 
   useEffect(() => {
@@ -95,6 +97,7 @@ export function PaymentSplitDialog({
   const handleConfirm = () => runPayment(false);
 
   const runPayment = async (confirmDuplicate: boolean) => {
+    if (submittingRef.current) return;
     if (!staffName.trim()) {
       toast.error("Enter staff name");
       return;
@@ -112,21 +115,24 @@ export function PaymentSplitDialog({
       return;
     }
 
-    // Pre-check the external leg before any writes so a confirm-and-retry never
-    // re-runs the wallet deduction.
-    if (cardNum > 0 && !confirmDuplicate) {
-      const dup = await findRecentDuplicateExternalPayment(supabase, {
-        invoiceId,
-        amountAed: cardNum,
-      });
-      if (dup) {
-        setDuplicatePayment(dup);
-        return;
-      }
-    }
-
+    submittingRef.current = true;
     setSubmitting(true);
     try {
+      // Pre-check the external leg before any writes so a confirm-and-retry never
+      // re-runs the wallet deduction. Soft alert only — hard 5s DB guard still applies
+      // unless staff explicitly confirm via DuplicatePaymentConfirmDialog.
+      if (cardNum > 0 && !confirmDuplicate) {
+        const dup = await findRecentDuplicateExternalPayment(supabase, {
+          invoiceId,
+          amountAed: cardNum,
+          method,
+        });
+        if (dup) {
+          setDuplicatePayment(dup);
+          return;
+        }
+      }
+
       if (ensureOutstanding) {
         const { error: statusErr } = await supabase
           .from("invoices")
@@ -151,7 +157,7 @@ export function PaymentSplitDialog({
           method,
           performedBy: staffName.trim(),
           amountAed: cardNum,
-          confirmDuplicate: true,
+          confirmDuplicate,
         });
         if (!res.success) throw new Error(res.error || "Card payment failed");
       }
@@ -170,6 +176,7 @@ export function PaymentSplitDialog({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Payment failed");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

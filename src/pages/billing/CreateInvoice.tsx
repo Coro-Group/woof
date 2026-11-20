@@ -7,10 +7,11 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { useInvoicePricingRows } from "@/hooks/useInvoicePricingRows";
 import { useOwner } from "@/hooks/useOwners";
+import { usePets } from "@/hooks/usePets";
 import { ownerDisplayName } from "@/lib/bookingUtils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,6 +28,7 @@ import {
   vatAmountFromGrossInclusive,
   vatLineLabel,
 } from "@/lib/vatConfig";
+import { cn } from "@/lib/utils";
 
 type InvoiceInsert = Database["public"]["Tables"]["invoices"]["Insert"];
 type InvoiceLineInsert = Database["public"]["Tables"]["invoice_line_items"]["Insert"];
@@ -70,55 +72,93 @@ function aed(v: number) {
   })}`;
 }
 
+function petChipLabel(name: string, breed: string | null | undefined) {
+  const breedLabel = breed?.trim();
+  return breedLabel ? `${name} · ${breedLabel}` : name;
+}
+
+function emptyLineDraft(description = ""): LineDraft {
+  return {
+    id: crypto.randomUUID(),
+    description,
+    pricingKey: "",
+    customMode: false,
+    quantity: 1,
+    unitPrice: 0,
+    total: 0,
+    discount: 0,
+    vat: 0,
+  };
+}
+
 export default function CreateInvoicePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const presetOwnerId = searchParams.get("ownerId") ?? "";
   const [ownerId, setOwnerId] = useState<string>(presetOwnerId);
   const [ownerLabel, setOwnerLabel] = useState("");
+  const [selectedPetIds, setSelectedPetIds] = useState<string[]>([]);
   const [serviceType, setServiceType] = useState("other");
   const [dueDate, setDueDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
-  const [lines, setLines] = useState<LineDraft[]>([
-    {
-      id: crypto.randomUUID(),
-      description: "",
-      pricingKey: "",
-      customMode: false,
-      quantity: 1,
-      unitPrice: 0,
-      total: 0,
-      discount: 0,
-      vat: 0,
-    },
-  ]);
+  const [lines, setLines] = useState<LineDraft[]>([emptyLineDraft()]);
   const [adjustments, setAdjustments] = useState<AdjustmentDraft[]>([]);
 
   const { data: owner } = useOwner(ownerId || "");
+  // Same fetch as Customer Profile pets section.
+  const { data: pets = [], isLoading: petsLoading } = usePets(ownerId || "");
+  const ownerPets = useMemo(
+    () => [...pets].sort((a, b) => a.name.localeCompare(b.name)),
+    [pets],
+  );
+  const selectedPets = useMemo(
+    () => ownerPets.filter((p) => selectedPetIds.includes(p.id)),
+    [ownerPets, selectedPetIds],
+  );
+  const allPetsSelected =
+    ownerPets.length > 0 && selectedPetIds.length === ownerPets.length;
+
   useEffect(() => {
     if (!owner?.id || owner.id !== ownerId) return;
     setOwnerLabel(ownerDisplayName(owner.first_name, owner.last_name));
   }, [owner, ownerId]);
+
+  useEffect(() => {
+    setSelectedPetIds([]);
+  }, [ownerId]);
+
   const linesRef = useRef(lines);
   linesRef.current = lines;
   const { data: pricingRows = [] } = useInvoicePricingRows();
 
-  const addLine = () =>
+  const togglePet = (petId: string) => {
+    setSelectedPetIds((prev) =>
+      prev.includes(petId) ? prev.filter((id) => id !== petId) : [...prev, petId],
+    );
+  };
+
+  const toggleSelectAllPets = () => {
+    setSelectedPetIds(allPetsSelected ? [] : ownerPets.map((p) => p.id));
+  };
+
+  const addLine = () => {
+    // Single selected pet → prefill description; otherwise blank line.
+    const description =
+      selectedPets.length === 1 ? selectedPets[0].name : "";
+    setLines((prev) => [...prev, emptyLineDraft(description)]);
+  };
+
+  const addLinePerSelectedPet = () => {
+    if (selectedPets.length === 0) {
+      toast.error("Select at least one pet first.");
+      return;
+    }
     setLines((prev) => [
       ...prev,
-      {
-        id: crypto.randomUUID(),
-        description: "",
-        pricingKey: "",
-        customMode: false,
-        quantity: 1,
-        unitPrice: 0,
-        total: 0,
-        discount: 0,
-        vat: 0,
-      },
+      ...selectedPets.map((pet) => emptyLineDraft(pet.name)),
     ]);
+  };
 
   const removeLine = (id: string) => setLines((prev) => prev.filter((l) => l.id !== id));
   const patchLine = (id: string, patch: Partial<LineDraft>) =>
@@ -287,13 +327,67 @@ export default function CreateInvoicePage() {
               onClear={() => {
                 setOwnerId("");
                 setOwnerLabel("");
+                setSelectedPetIds([]);
               }}
             />
 
             {ownerId && owner?.id === ownerId && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-muted-foreground">Selected client</span>
-                <span className="text-sm font-semibold">{ownerLabel}</span>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Selected client</span>
+                  <span className="text-sm font-semibold">{ownerLabel}</span>
+                </div>
+
+                <div className="space-y-2" data-testid="billing-create-invoice-pets">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label className="text-sm">Pets on this invoice</Label>
+                    {ownerPets.length > 0 && (
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={allPetsSelected}
+                          onCheckedChange={() => toggleSelectAllPets()}
+                          data-testid="billing-create-invoice-select-all-pets"
+                        />
+                        Select all
+                      </label>
+                    )}
+                  </div>
+                  {petsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading pets…</p>
+                  ) : ownerPets.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No pets on this client.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {ownerPets.map((pet) => {
+                        const checked = selectedPetIds.includes(pet.id);
+                        return (
+                          <label
+                            key={pet.id}
+                            className={cn(
+                              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors",
+                              checked
+                                ? "border-primary bg-primary/10 text-foreground"
+                                : "border-input bg-background text-muted-foreground hover:bg-muted/40",
+                            )}
+                            data-testid={`billing-create-invoice-pet-${pet.id}`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => togglePet(pet.id)}
+                            />
+                            <span>{petChipLabel(pet.name, pet.breed)}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {selectedPets.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Selected pets prefill line descriptions; use “Add line per pet” for one
+                      charge row each.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -320,9 +414,28 @@ export default function CreateInvoicePage() {
 
         <Card>
           <CardContent className="p-5 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-semibold">Line items</h3>
-              <Button variant="outline" size="sm" onClick={addLine}>Add line</Button>
+              <div className="flex flex-wrap gap-2">
+                {selectedPets.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={addLinePerSelectedPet}
+                    data-testid="billing-create-invoice-add-line-per-pet"
+                  >
+                    Add line per pet ({selectedPets.length})
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addLine}
+                  data-testid="billing-create-invoice-add-line"
+                >
+                  Add line
+                </Button>
+              </div>
             </div>
             {lines.map((line) => (
               <div key={line.id} className="rounded-md border p-3 space-y-3">

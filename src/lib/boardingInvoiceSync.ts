@@ -10,19 +10,11 @@ import {
 import { createBookingInvoice } from "@/lib/bookingUtils";
 import { formatAed, roundAed } from "@/lib/money";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
-import { invoiceAdjustmentDiscountTotal } from "@/lib/invoiceRecalc";
-import { invoiceDisplayTotals, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
+import { invoiceDisplayTotals } from "@/lib/vatConfig";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
 
 type InvoiceRow = Database["public"]["Tables"]["invoices"]["Row"];
 type LineRow = Database["public"]["Tables"]["invoice_line_items"]["Row"];
-
-const PAYMENT_TX_TYPES = new Set([
-  "cash_payment",
-  "card_payment",
-  "bank_transfer_payment",
-  "deduction",
-]);
 
 export type SyncBoardingInvoiceResult =
   | { kind: "no_invoice" }
@@ -48,32 +40,6 @@ function lineRowToServiceItem(row: LineRow): BoardingInvoiceLineItem {
     serviceType: row.service_type ?? undefined,
     preserveUnitPrice: true,
   };
-}
-
-function totalsFromLineItems(
-  lineItems: BoardingInvoiceLineItem[],
-  discountAmount: number,
-): { subtotal: number; grossTotal: number; vatAed: number } {
-  const subtotal = lineItems.reduce((s, li) => s + li.unitPrice * Math.max(1, li.quantity), 0);
-  const grossTotal = Math.max(0, roundAed(subtotal - discountAmount));
-  const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  return { subtotal: roundAed(subtotal), grossTotal, vatAed };
-}
-
-async function effectiveAmountPaid(invoice: InvoiceRow): Promise<number> {
-  const stored = roundAed(invoice.amount_paid ?? 0);
-  const { data, error } = await getSupabase()
-    .from("wallet_transactions")
-    .select("amount, transaction_type")
-    .eq("invoice_id", invoice.id);
-  if (error) throw error;
-
-  const fromTx = (data ?? []).reduce((sum, row) => {
-    if (!PAYMENT_TX_TYPES.has(row.transaction_type)) return sum;
-    return sum + Math.abs(Number(row.amount) || 0);
-  }, 0);
-
-  return roundAed(Math.max(stored, fromTx));
 }
 
 async function loadBookingForInvoice(bookingId: string) {
@@ -179,25 +145,6 @@ export async function syncBoardingBookingInvoice(
 
   const merged: BoardingInvoiceLineItem[] = [...nightLines, ...preserved.map(lineRowToServiceItem)];
 
-  const { data: adjustmentsBeforeSync, error: adjFetchErr } = await getSupabase()
-    .from("billing_adjustments")
-    .select("adjustment_type, adjusted_amount")
-    .eq("invoice_id", invoice.id);
-  if (adjFetchErr) throw adjFetchErr;
-
-  // Do not carry stale invoice.discount_amount; double occupancy is recomputed by RPC below.
-  const discountAmount = invoiceAdjustmentDiscountTotal(adjustmentsBeforeSync ?? [], {
-    excludeTypes: ["double_occupancy_discount"],
-  });
-  const { subtotal, grossTotal, vatAed } = totalsFromLineItems(merged, discountAmount);
-  const amountPaid = await effectiveAmountPaid(invoice);
-  const { grandTotal } = invoiceDisplayTotals({
-    total: grossTotal,
-    vat_aed: vatAed,
-  });
-  const outstanding = roundAed(Math.max(0, grandTotal - amountPaid));
-  const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
-
   const { error: delErr } = await getSupabase()
     .from("invoice_line_items")
     .delete()
@@ -220,28 +167,18 @@ export async function syncBoardingBookingInvoice(
     if (insErr) throw insErr;
   }
 
-  const updatePayload: Database["public"]["Tables"]["invoices"]["Update"] = {
-    subtotal,
-    total: grossTotal,
-    vat_aed: vatAed,
-    due_date: invoiceDueDateAtCheckIn(booking.check_in_date),
-    status: status as Database["public"]["Enums"]["invoice_status"],
-    amount_paid: amountPaid,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (status === "paid" && !invoice.paid_at) {
-    updatePayload.paid_at = new Date().toISOString();
-  }
-  if (status !== "paid") {
-    updatePayload.paid_at = null;
-  }
-
-  const { error: updErr } = await getSupabase()
+  // Money fields are rewritten by apply_double_occupancy_discount, which
+  // re-applies approved discounts in the same transaction. Do not write
+  // total or discount_amount here — that used to leave the invoice at the
+  // pre-discount subtotal when the occupancy amount was zero.
+  const { error: dueErr } = await getSupabase()
     .from("invoices")
-    .update(updatePayload)
+    .update({
+      due_date: invoiceDueDateAtCheckIn(booking.check_in_date),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", invoice.id);
-  if (updErr) throw updErr;
+  if (dueErr) throw dueErr;
 
   const { error: occupancyErr } = await getSupabase().rpc("apply_double_occupancy_discount", {
     p_booking_id: bookingId,
@@ -256,11 +193,12 @@ export async function syncBoardingBookingInvoice(
   if (refreshErr) throw refreshErr;
 
   const refreshedGrandTotal = invoiceDisplayTotals({
-    total: roundAed(refreshedInvoice.total ?? grossTotal),
+    total: roundAed(refreshedInvoice.total ?? 0),
     vat_aed: refreshedInvoice.vat_aed,
     service_type: refreshedInvoice.service_type,
     notes: refreshedInvoice.notes,
   }).grandTotal;
+  const amountPaid = roundAed(refreshedInvoice.amount_paid ?? 0);
   const refreshedOutstanding = roundAed(Math.max(0, refreshedGrandTotal - amountPaid));
   const refreshedStatus = deriveInvoiceStatusAfterRecalc(
     refreshedInvoice.status,

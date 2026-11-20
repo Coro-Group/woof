@@ -28,6 +28,7 @@ describe("addonPricing legacy key bridge", () => {
     expect(GROOMING_SERVICE_TO_SERVICE_CODE.full_groom).toBe("grooming_full_service");
     expect(GROOMING_SERVICE_TO_SERVICE_CODE.deshedding).toBe("grooming_hair_no_more");
     expect(GROOMING_SERVICE_TO_SERVICE_CODE.tidy).toBe("grooming_tidy");
+    expect(GROOMING_SERVICE_TO_SERVICE_CODE.splash).toBe("grooming_splash");
     expect(GROOMING_SERVICE_TO_SERVICE_CODE.gland_expression).toBe("grooming_gland_expression");
   });
 });

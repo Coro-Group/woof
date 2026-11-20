@@ -34,6 +34,8 @@ export interface InvoiceAlerts {
   overdue: InvoiceAlertRow[];
   depositBypassed: InvoiceAlertRow[];
   multipleUnpaid: MultipleUnpaidOwner[];
+  /** status=paid + amount_paid=0 + no invoice_payments — needs manual settlement review. */
+  paidWithoutSettlement: InvoiceAlertRow[];
 }
 
 type AlertQueryRow = {
@@ -63,13 +65,21 @@ export function useInvoiceAlerts() {
   return useQuery({
     queryKey: ["invoice-alerts"],
     queryFn: async (): Promise<InvoiceAlerts> => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(
-          "id, invoice_number, owner_id, service_type, total, amount_paid, status, due_date, created_at, deposit_bypassed, deposit_bypass_reason, receipt_only, owners(first_name, last_name)",
-        )
-        .order("created_at", { ascending: false });
-      if (error) throw error;
+      const [invoicesRes, paymentsRes] = await Promise.all([
+        supabase
+          .from("invoices")
+          .select(
+            "id, invoice_number, owner_id, service_type, total, amount_paid, status, due_date, created_at, deposit_bypassed, deposit_bypass_reason, receipt_only, owners(first_name, last_name)",
+          )
+          .order("created_at", { ascending: false }),
+        supabase.from("invoice_payments").select("invoice_id"),
+      ]);
+      if (invoicesRes.error) throw invoicesRes.error;
+      if (paymentsRes.error) throw paymentsRes.error;
+
+      const invoicesWithPayments = new Set(
+        (paymentsRes.data ?? []).map((p) => p.invoice_id),
+      );
 
       const now = new Date();
       const startOfToday = new Date(now);
@@ -99,7 +109,7 @@ export function useInvoiceAlerts() {
         };
       };
 
-      const rows = ((data ?? []) as AlertQueryRow[]).filter((r) => !r.receipt_only);
+      const rows = ((invoicesRes.data ?? []) as AlertQueryRow[]).filter((r) => !r.receipt_only);
 
       const staleDrafts = rows
         .filter((r) => r.status === "draft" && new Date(r.created_at) < eobToday)
@@ -116,6 +126,16 @@ export function useInvoiceAlerts() {
 
       const depositBypassed = rows
         .filter((r) => r.deposit_bypassed && new Date(r.created_at) >= startOfToday)
+        .map(toRow);
+
+      const paidWithoutSettlement = rows
+        .filter(
+          (r) =>
+            r.status === "paid" &&
+            Math.max(0, r.amount_paid ?? 0) === 0 &&
+            (r.total ?? 0) > 0 &&
+            !invoicesWithPayments.has(r.id),
+        )
         .map(toRow);
 
       const byOwner = new Map<string, MultipleUnpaidOwner>();
@@ -137,7 +157,13 @@ export function useInvoiceAlerts() {
       }
       const multipleUnpaid = [...byOwner.values()].filter((o) => o.count >= 2);
 
-      return { staleDrafts, overdue, depositBypassed, multipleUnpaid };
+      return {
+        staleDrafts,
+        overdue,
+        depositBypassed,
+        multipleUnpaid,
+        paidWithoutSettlement,
+      };
     },
   });
 }

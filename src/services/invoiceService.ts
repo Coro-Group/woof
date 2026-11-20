@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
 import { roundAed } from "@/lib/money";
+import { loadInvoiceWalletBalanceDue } from "@/lib/invoiceWalletBalance";
 import { invoiceAmountDue } from "@/lib/vatConfig";
 import { type PaymentMethod } from "@/lib/paymentMethod";
 import {
@@ -121,6 +122,11 @@ export interface RecordPaymentParams {
   skipWalletDeduction?: boolean;
   /** Link an existing wallet_transactions row to the payment. Default null. */
   walletTransactionId?: string | null;
+  /**
+   * Staff confirmed a recent same-amount payment is intentional. Passed through
+   * to insert_invoice_payment so the short-window DB guard allows the insert.
+   */
+  confirmDuplicate?: boolean;
 }
 
 export interface RecordPaymentResult {
@@ -145,10 +151,25 @@ export async function recordPayment(
   params: RecordPaymentParams,
 ): Promise<RecordPaymentResult> {
   const supabase = params.client ?? defaultClient;
-  const amount = roundAed(params.amount);
+  let amount = roundAed(params.amount);
 
   if (!(amount > 0)) {
     return { success: false, error: "Payment amount must be greater than zero." };
+  }
+
+  if (params.method === "wallet" && !params.skipWalletDeduction) {
+    try {
+      const { balanceDue } = await loadInvoiceWalletBalanceDue(supabase, params.invoiceId);
+      amount = roundAed(Math.min(amount, balanceDue));
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Could not load invoice.",
+      };
+    }
+    if (!(amount > 0)) {
+      return { success: false, error: "This invoice has no outstanding balance." };
+    }
   }
 
   const { data: invoice, error: invErr } = await supabase
@@ -207,27 +228,24 @@ export async function recordPayment(
     }
   }
 
-  const { data: payment, error: payErr } = await supabase
-    .from("invoice_payments")
-    .insert({
-      invoice_id: params.invoiceId,
-      owner_id: invoice.owner_id,
-      amount,
-      payment_method: params.method,
-      wallet_transaction_id: walletTransactionId,
-      opening_balance: openingBalance,
-      closing_balance: closingBalance,
-      notes: params.notes?.trim() || null,
-      recorded_by: recordedBy,
-    })
-    .select("id")
-    .single();
+  const { data: paymentId, error: payErr } = await supabase.rpc("insert_invoice_payment", {
+    p_invoice_id: params.invoiceId,
+    p_owner_id: invoice.owner_id,
+    p_amount: amount,
+    p_payment_method: params.method,
+    p_opening_balance: openingBalance,
+    p_closing_balance: closingBalance,
+    p_recorded_by: recordedBy,
+    p_notes: params.notes?.trim() || null,
+    p_wallet_transaction_id: walletTransactionId,
+    p_confirm_duplicate: params.confirmDuplicate ?? false,
+  });
 
   if (payErr) return { success: false, error: payErr.message };
 
   return {
     success: true,
-    paymentId: payment.id,
+    paymentId: paymentId as string,
     openingBalance,
     closingBalance,
     walletTransactionId,
@@ -236,60 +254,6 @@ export async function recordPayment(
 
 // applyWalletThenExternal removed — use PaymentSplitDialog for wallet-first
 // split payments. recordPayment handles individual legs.
-
-export interface VoidInvoiceParams {
-  invoiceId: string;
-  voidedBy: string;
-  reason: string;
-  /** Discretionary refund note recorded when payments exist on the invoice. */
-  refundNote?: string;
-  refundAmount?: number;
-  client?: Client;
-}
-
-export async function voidInvoice(
-  params: VoidInvoiceParams,
-): Promise<{ success: boolean; error?: string }> {
-  const supabase = params.client ?? defaultClient;
-  const reason = params.reason.trim();
-  if (!reason) return { success: false, error: "A void reason is mandatory." };
-
-  const { data: invoice, error: invErr } = await supabase
-    .from("invoices")
-    .select("id, status, notes")
-    .eq("id", params.invoiceId)
-    .single();
-  if (invErr) return { success: false, error: invErr.message };
-
-  if (invoice.status === "finalised") {
-    return { success: false, error: "Finalised invoices cannot be voided." };
-  }
-  if (invoice.status === "consolidated") {
-    return { success: false, error: "Consolidated invoices cannot be voided." };
-  }
-
-  let notes = invoice.notes ?? "";
-  if (params.refundNote?.trim() || params.refundAmount != null) {
-    const refundLine = `Refund note: ${params.refundNote?.trim() ?? ""}${
-      params.refundAmount != null ? ` (AED ${roundAed(params.refundAmount)})` : ""
-    }`.trim();
-    notes = notes ? `${notes}\n${refundLine}` : refundLine;
-  }
-
-  const { error: updErr } = await supabase
-    .from("invoices")
-    .update({
-      status: "voided",
-      voided_at: new Date().toISOString(),
-      voided_by: params.voidedBy.trim() || "reception",
-      voided_reason: reason,
-      notes,
-    })
-    .eq("id", params.invoiceId);
-
-  if (updErr) return { success: false, error: updErr.message };
-  return { success: true };
-}
 
 export interface AmendInvoiceParams {
   invoiceId: string;

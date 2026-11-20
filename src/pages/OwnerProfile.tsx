@@ -40,7 +40,6 @@ import {
 import { formatWalletAed } from "@/lib/money";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
 import { ConsolidateInvoicesDialog } from "@/components/billing/ConsolidateInvoicesDialog";
-import { WalletBalanceDisplay, OutstandingAmountBadge } from "@/components/billing/WalletBalanceDisplay";
 import { ClearOutstandingAfterTopUpDialog } from "@/components/billing/ClearOutstandingAfterTopUpDialog";
 import { PaymentSplitDialog } from "@/components/billing/PaymentSplitDialog";
 import { canConsolidateInvoiceStatus } from "@/lib/invoiceConsolidation";
@@ -385,17 +384,16 @@ function OwnerBillingSection({ ownerId }: { ownerId: string }) {
             <CardContent className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-xs uppercase text-muted-foreground">Account balance (SOA)</p>
-                  <WalletBalanceDisplay
-                    accountBalance={ownerBalances.netPosition}
-                    size="compact"
-                    amountClassName={
-                      ownerBalances.netPosition < 0 ? "text-red-600 dark:text-red-400" : undefined
+                  <p className="text-xs uppercase text-muted-foreground">Outstanding debt</p>
+                  <p
+                    className={
+                      ownerBalances.invoiceRemainingTotal > 0
+                        ? "mt-1 text-2xl font-bold tabular-nums text-red-600 dark:text-red-400"
+                        : "mt-1 text-2xl font-bold tabular-nums"
                     }
-                  />
-                  {ownerBalances.invoiceRemainingTotal > 0 && ownerBalances.netPosition >= 0 && (
-                    <OutstandingAmountBadge amount={ownerBalances.invoiceRemainingTotal} />
-                  )}
+                  >
+                    {formatWalletAed(ownerBalances.invoiceRemainingTotal)}
+                  </p>
                 </div>
                 <Button
                   size="sm"
@@ -694,12 +692,12 @@ function OwnerBillingSection({ ownerId }: { ownerId: string }) {
                   {
                     onSuccess: (data) => {
                       toast.success("Wallet topped up.", {
-                        action: data?.id
+                        action: data?.receipt_id
                           ? {
                               label: "Print receipt",
                               onClick: () =>
                                 window.open(
-                                  `/print/topup-receipt/${data.id}`,
+                                  `/print/topup-receipt/${data.receipt_id}`,
                                   "_blank",
                                   "noopener,noreferrer",
                                 ),
@@ -1118,26 +1116,30 @@ const OwnerProfilePage = () => {
               <div className="text-right">
                 <div className="flex items-center justify-end gap-1 text-xs uppercase tracking-wide text-muted-foreground">
                   <Wallet className="h-3.5 w-3.5" />
-                  Account balance (SOA)
+                  Wallet balance
                 </div>
-                {ownerBalances.isLoading ? (
-                  <Skeleton className="mt-1 ml-auto h-9 w-28" />
-                ) : (
-                  <WalletBalanceDisplay
-                    accountBalance={ownerBalances.netPosition}
-                    amountClassName={
-                      ownerBalances.netPosition < 0 ? "text-red-600 dark:text-red-400" : undefined
-                    }
-                  />
-                )}
-                {!ownerBalances.isLoading &&
-                  ownerBalances.invoiceRemainingTotal > 0 &&
-                  ownerBalances.netPosition >= 0 && (
-                    <div className="mt-1 flex justify-end">
-                      <OutstandingAmountBadge amount={ownerBalances.invoiceRemainingTotal} />
-                    </div>
+                <p className="mt-1 text-3xl font-bold tabular-nums">
+                  {formatWalletAed(owner.wallet_balance ?? 0)}
+                </p>
+                <div className="mt-3">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Outstanding debt
+                  </p>
+                  {ownerBalances.isLoading ? (
+                    <Skeleton className="mt-0.5 ml-auto h-5 w-24" />
+                  ) : (
+                    <p
+                      className={
+                        ownerBalances.invoiceRemainingTotal > 0
+                          ? "mt-0.5 text-sm font-semibold tabular-nums text-red-600 dark:text-red-400"
+                          : "mt-0.5 text-sm font-semibold tabular-nums text-muted-foreground"
+                      }
+                    >
+                      {formatWalletAed(ownerBalances.invoiceRemainingTotal)}
+                    </p>
                   )}
-                <div className="mt-2 flex flex-col items-end gap-2">
+                </div>
+                <div className="mt-3 flex flex-col items-end gap-2">
                   <Button
                     type="button"
                     variant="outline"
@@ -2336,12 +2338,12 @@ const OwnerProfilePage = () => {
                 {
                   onSuccess: (data) => {
                     toast.success(`AED ${amount.toFixed(2)} added to wallet.`, {
-                      action: data?.id
+                      action: data?.receipt_id
                         ? {
                             label: "Print receipt",
                             onClick: () =>
                               window.open(
-                                `/print/topup-receipt/${data.id}`,
+                                `/print/topup-receipt/${data.receipt_id}`,
                                 "_blank",
                                 "noopener,noreferrer",
                               ),

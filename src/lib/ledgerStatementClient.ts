@@ -1,7 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import type { LedgerStatementRow } from "@/hooks/useStatement";
-import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
+import {
+  isLedgerOrphanInvoiceDeduction,
+  isLedgerVoidedWalletRefund,
+  isSoaInvoiceStatus,
+} from "@/lib/invoiceStatus";
 import { invoicePaymentMethodToTransactionType } from "@/lib/paymentMethod";
 import { roundAed } from "@/lib/money";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
@@ -9,6 +13,10 @@ import {
   orphanWalletDeductions,
   syntheticWalletPaymentsFromDeductions,
 } from "@/lib/walletDeductionPayments";
+import {
+  isPaidWithoutSettlement,
+  PAID_WITHOUT_SETTLEMENT_NOTE,
+} from "@/lib/paidWithoutSettlement";
 
 type Client = SupabaseClient<Database>;
 
@@ -47,10 +55,6 @@ function invoiceGross(invoice: {
     service_type: invoice.service_type,
     notes: invoice.notes,
   }).grandTotal;
-}
-
-function isSoaInvoiceStatus(status: string): boolean {
-  return !isInactiveInvoiceStatus(status);
 }
 
 /** Client-side reconstruction when get_ledger_statement RPC is unavailable. */
@@ -99,6 +103,11 @@ export async function loadLedgerStatementClient(
   const syntheticPayments = syntheticWalletPaymentsFromDeductions(orphanDeductions);
   const allPayments = [...paymentRows, ...syntheticPayments];
   const invoicesWithPayments = new Set(allPayments.map((p) => p.invoice_id));
+  const invoicesWithWalletDeduction = new Set(
+    (walletRes.data ?? [])
+      .filter((wt) => wt.transaction_type === "deduction" && wt.invoice_id)
+      .map((wt) => wt.invoice_id as string),
+  );
 
   const events: RawEvent[] = [];
 
@@ -128,6 +137,8 @@ export async function loadLedgerStatementClient(
   for (const p of allPayments) {
     const inv = invoiceById.get(p.invoice_id);
     if (!inv || inv.receipt_only) continue;
+    // Pair with invoice debits: exclude payments on voided/consolidated/cancelled/draft
+    if (!isSoaInvoiceStatus(inv.status)) continue;
     const isWallet = p.payment_method === "wallet";
     events.push({
       row_id: `pay:${p.id}`,
@@ -152,32 +163,75 @@ export async function loadLedgerStatementClient(
     if (i.receipt_only) continue;
     if (invoicesWithPayments.has(i.id)) continue;
     const paid = roundAed(Number(i.amount_paid ?? 0));
-    if (paid <= 0) continue;
-    const isWallet = i.payment_method === "wallet";
-    events.push({
-      row_id: `legacy_pay:${i.id}`,
-      event_at: i.paid_at ?? i.updated_at ?? i.created_at,
-      sort_seq: 2,
-      amount: paid,
-      is_visible: !isWallet,
-      transaction_type: isWallet
-        ? "wallet_payment"
-        : i.payment_method
-          ? invoicePaymentMethodToTransactionType(i.payment_method)
-          : "manual_topup",
-      invoice_id: i.id,
-      invoice_number: i.invoice_number,
-      service_type: i.service_type,
-      due_date: i.due_date,
-      payment_method: i.payment_method,
-      notes: "Legacy settled amount",
-    });
+    if (paid > 0) {
+      const isWallet = i.payment_method === "wallet";
+      events.push({
+        row_id: `legacy_pay:${i.id}`,
+        event_at: i.paid_at ?? i.updated_at ?? i.created_at,
+        sort_seq: 2,
+        amount: paid,
+        is_visible: !isWallet,
+        transaction_type: isWallet
+          ? "wallet_payment"
+          : i.payment_method
+            ? invoicePaymentMethodToTransactionType(i.payment_method)
+            : "manual_topup",
+        invoice_id: i.id,
+        invoice_number: i.invoice_number,
+        service_type: i.service_type,
+        due_date: i.due_date,
+        payment_method: i.payment_method,
+        notes: "Legacy settled amount",
+      });
+      continue;
+    }
+
+    // status=paid + amount_paid=0 + no invoice_payments (legacy import): credit
+    // the gross so SOA K is not inflated. Do not invent amount_paid — flag for review.
+    const gross = roundAed(invoiceGross(i));
+    if (
+      isPaidWithoutSettlement({
+        status: i.status,
+        amountPaid: i.amount_paid,
+        grossTotal: gross,
+        hasPaymentRows: false,
+      })
+    ) {
+      events.push({
+        row_id: `paid_no_settle:${i.id}`,
+        event_at: i.paid_at ?? i.updated_at ?? i.created_at,
+        sort_seq: 2,
+        amount: gross,
+        is_visible: true,
+        transaction_type: "manual_topup",
+        invoice_id: i.id,
+        invoice_number: i.invoice_number,
+        service_type: i.service_type,
+        due_date: i.due_date,
+        payment_method: i.payment_method,
+        notes: PAID_WITHOUT_SETTLEMENT_NOTE,
+      });
+    }
   }
 
   for (const wt of walletRes.data ?? []) {
-    if (wt.invoice_id != null) continue;
-    if (!STANDALONE_WALLET_TYPES.has(wt.transaction_type)) continue;
     const inv = wt.invoice_id ? invoiceById.get(wt.invoice_id) : undefined;
+    const isStandalone =
+      wt.invoice_id == null && STANDALONE_WALLET_TYPES.has(wt.transaction_type);
+    // Mirror SQL: keep deductions only after the invoice was issued and then
+    // left SOA (voided/consolidated/cancelled). Drafts were never issued.
+    const isOrphanInvoiceDeduction = isLedgerOrphanInvoiceDeduction(
+      wt.transaction_type,
+      wt.invoice_id,
+      inv?.status,
+    );
+    const isVoidedWalletRefund = isLedgerVoidedWalletRefund(
+      wt.transaction_type,
+      wt.invoice_id,
+      inv?.status,
+      wt.invoice_id != null && invoicesWithWalletDeduction.has(wt.invoice_id),
+    );
+    if (!isStandalone && !isOrphanInvoiceDeduction && !isVoidedWalletRefund) continue;
     events.push({
       row_id: `wt:${wt.id}`,
       event_at: wt.created_at,

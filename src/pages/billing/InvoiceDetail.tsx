@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import TopBar from "@/components/dashboard/TopBar";
 import { supabase } from "@/integrations/supabase/client";
 import { useInvoiceDetail } from "@/hooks/useInvoiceDetail";
 import { useLinkedDaycareSessionsForInvoice } from "@/hooks/useDaycare";
-import { useCancellationRefundPreview } from "@/hooks/useCancellationRefund";
 import { useProcessWalletPayment, useRecordExternalPayment, useRevertInvoicePayment } from "@/hooks/usePayments";
+import { VoidInvoiceDialog } from "@/components/billing/VoidInvoiceDialog";
+import { VoidedInvoiceBanner } from "@/components/billing/VoidedInvoiceBanner";
 import { StaffNameSelect } from "@/components/staff/StaffNameSelect";
 import { paymentMethodLabel, type ExternalPaymentMethod } from "@/lib/paymentMethod";
 import { CreditCard, Printer, Trash2 } from "lucide-react";
@@ -38,6 +39,7 @@ import { invoiceLineDisplayAmounts, invoiceResolvedAmounts, roundMoney2, vatLine
 import { InvoiceAdjustmentAmountInput } from "@/components/billing/InvoiceAdjustmentAmountInput";
 import { PaymentSplitDialog } from "@/components/billing/PaymentSplitDialog";
 import {
+  describeApprovedDiscountLines,
   discountReasonWithMode,
   type InvoiceDiscountMode,
   isPercentDiscountAdjustmentType,
@@ -99,12 +101,9 @@ export default function InvoiceDetailPage() {
   const [externalPayOpen, setExternalPayOpen] = useState<ExternalPaymentMethod | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [duplicatePayment, setDuplicatePayment] = useState<DuplicatePaymentInfo | null>(null);
-  const [voidBlockedOpen, setVoidBlockedOpen] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
   const [revertOpen, setRevertOpen] = useState(false);
   const [revertReason, setRevertReason] = useState("");
-  const [serviceStart, setServiceStart] = useState("");
-  const [refundAmount, setRefundAmount] = useState("0");
   const [refundNote, setRefundNote] = useState("");
   const [performedBy, setPerformedBy] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
@@ -124,22 +123,24 @@ export default function InvoiceDetailPage() {
   const [markDueOpen, setMarkDueOpen] = useState(false);
   const [markDueReason, setMarkDueReason] = useState("");
   const [markDueBusy, setMarkDueBusy] = useState(false);
+  /** Sync guard — isPending alone loses to double-clicks before re-render. */
+  const externalPayBusyRef = useRef(false);
+  const [externalPayBusy, setExternalPayBusy] = useState(false);
 
   const handlePrint = useCallback(() => {
     if (!id) return;
     window.open(`/print/invoice/${id}`, "_blank", "noopener,noreferrer");
   }, [id]);
 
-  const refundPreview = useCancellationRefundPreview(
-    data?.invoice?.owner_id,
-    data?.invoice?.id,
-    serviceStart || undefined,
-  );
-
   const isDaycareInvoice = data?.invoice?.service_type === "daycare";
   const { data: linkedDaycareSessions = [] } = useLinkedDaycareSessionsForInvoice(
     isDaycareInvoice ? data?.invoice?.id : undefined,
     isDaycareInvoice ? data?.invoice?.service_id ?? undefined : undefined,
+  );
+
+  const approvedDiscountLines = useMemo(
+    () => describeApprovedDiscountLines(data?.adjustments ?? []),
+    [data?.adjustments],
   );
 
   const computed = useMemo(() => {
@@ -168,6 +169,8 @@ export default function InvoiceDetailPage() {
     // invoice.amount_paid is maintained by both wallet and cash/card payment flows.
     // Summing wallet_transactions directly doesn't work because wallet deductions
     // are stored as negative amounts (Math.max(0, amount) would skip them).
+    // Do not subtract invoices.opening_balance — it is a wallet snapshot at issue,
+    // not a deposit applied to this invoice.
     const amountPaid = roundMoney2(Math.max(0, invoice?.amount_paid ?? 0));
     const outstanding = Math.max(0, resolved.display.grandTotal - amountPaid);
     return {
@@ -270,26 +273,14 @@ export default function InvoiceDetailPage() {
     }
   };
 
-  const doVoid = async () => {
-    if (computed.amountPaid > 0) {
-      setRefundAmount(String(walletRefundFromPayments(data?.payments ?? [])));
-      setVoidBlockedOpen(true);
-      return;
-    }
-    const { error } = await supabase
-      .from("invoices")
-      .update({ status: "voided", voided_at: new Date().toISOString() })
-      .eq("id", inv.id);
-    if (error) return toast.error(error.message);
-    toast.success("Invoice voided.");
-    refetch();
-  };
-
   const submitExternal = async (confirmDuplicate: boolean) => {
+    if (externalPayBusyRef.current) return;
     if (!externalPayOpen) return;
     if (!performedBy.trim()) return toast.error("Staff name is required.");
     const amount = parseFloat(payAmount || "0");
     if (!amount || Number.isNaN(amount)) return toast.error("Enter a valid payment amount.");
+    externalPayBusyRef.current = true;
+    setExternalPayBusy(true);
     try {
       const result = await externalPay.mutateAsync({
         invoiceId: inv.id,
@@ -315,16 +306,22 @@ export default function InvoiceDetailPage() {
       refetch();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not record payment.");
+    } finally {
+      externalPayBusyRef.current = false;
+      setExternalPayBusy(false);
     }
   };
 
   const doRecordExternal = () => submitExternal(false);
+  const externalPaySubmitting = externalPayBusy || externalPay.isPending;
 
   const doWalletPay = async () => {
     if (!performedBy.trim()) return toast.error("Staff name is required.");
     try {
       const result = await walletPay.mutateAsync({ invoiceId: inv.id, performedBy: performedBy.trim() });
-      if (result.partial) {
+      if ((result.amount_charged ?? 0) <= 0) {
+        toast.success("Invoice already matches the discounted total. Nothing more was charged.");
+      } else if (result.partial) {
         toast.success(`Partial wallet payment recorded — AED ${result.amount_charged?.toFixed(2)} deducted.`);
       } else {
         toast.success("Wallet payment completed.");
@@ -386,37 +383,6 @@ export default function InvoiceDetailPage() {
     refetch();
   };
 
-  const doCancelRefund = async () => {
-    const amount = parseFloat(refundAmount || "0") || 0;
-    if (!performedBy.trim()) return toast.error("Staff name is required.");
-    if (amount > 0) {
-      const currentBalance = inv.owners?.wallet_balance ?? 0;
-      const { error: txErr } = await supabase.from("wallet_transactions").insert({
-        owner_id: inv.owner_id,
-        invoice_id: inv.id,
-        transaction_type: "refund",
-        amount,
-        balance_after: currentBalance + amount,
-        payment_method: null,
-        performed_by: performedBy.trim(),
-        notes: refundNote.trim() || "Cancellation refund",
-      });
-      if (txErr) return toast.error(txErr.message);
-    }
-    const { error } = await supabase
-      .from("invoices")
-      .update({
-        status: "voided",
-        voided_reason: refundNote.trim() || "Cancelled with refund",
-        voided_at: new Date().toISOString(),
-      })
-      .eq("id", inv.id);
-    if (error) return toast.error(error.message);
-    toast.success("Invoice cancelled and refund recorded.");
-    setCancelOpen(false);
-    refetch();
-  };
-
   const doRevertPayment = async () => {
     if (!performedBy.trim()) return toast.error("Staff name is required.");
     try {
@@ -462,6 +428,15 @@ export default function InvoiceDetailPage() {
             </div>
           </CardContent>
         </Card>
+
+        {status === "voided" ? (
+          <VoidedInvoiceBanner
+            invoiceId={inv.id}
+            voidedBy={inv.voided_by}
+            voidedAt={inv.voided_at}
+            voidedReason={inv.voided_reason}
+          />
+        ) : null}
 
         <InvoiceLedgerCard invoiceId={inv.id} onChanged={() => void refetch()} />
 
@@ -599,6 +574,12 @@ export default function InvoiceDetailPage() {
         <Card>
           <CardContent className="p-5 grid gap-1 text-sm md:max-w-md ml-auto">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{aed(computed.lineSubtotal)}</span></div>
+            {approvedDiscountLines.map((line) => (
+              <div key={line.key} className="flex justify-between gap-3">
+                <span className="text-muted-foreground">{line.label}</span>
+                <span className="tabular-nums">−{aed(line.amount)}</span>
+              </div>
+            ))}
             <div className="flex justify-between"><span className="text-muted-foreground">Total discount</span><span>{aed(computed.totalDiscount)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal (ex VAT)</span><span>{aed(computed.netExVat)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">{vatLineLabel()}</span><span>{aed(computed.vat)}</span></div>
@@ -652,7 +633,6 @@ export default function InvoiceDetailPage() {
                     refetch();
                   }}
                 />
-                <Button variant="destructive" onClick={doVoid}>Void</Button>
               </>
             )}
             {["finalised", "outstanding", "overdue", "issued", "partially_paid"].includes(status) && (
@@ -664,12 +644,6 @@ export default function InvoiceDetailPage() {
                 <Button variant="outline" onClick={() => openExternalPay("card")}>Record card</Button>
                 <Button variant="outline" onClick={() => openExternalPay("bank_transfer")}>Bank transfer</Button>
                 <Button variant="outline" onClick={() => openExternalPay("payment_link")}>Payment link</Button>
-                <Button variant="destructive" onClick={doVoid}>Void</Button>
-                <Button variant="outline" onClick={() => {
-                  setServiceStart(inv.issue_date || inv.created_at.slice(0, 10));
-                  setRefundAmount(String(walletRefundFromPayments(data.payments)));
-                  setCancelOpen(true);
-                }}>Cancel & refund</Button>
               </>
             )}
             {(status === "paid" || status === "partially_paid") && showRevertPayment && (
@@ -686,10 +660,15 @@ export default function InvoiceDetailPage() {
                 Revert payment
               </Button>
             )}
-            {status === "paid" && (
-              <Button variant="destructive" onClick={doVoid}>Void</Button>
+            {status !== "voided" && status !== "cancelled" && status !== "consolidated" && (
+              <Button
+                variant="destructive"
+                onClick={() => setVoidOpen(true)}
+                data-testid="invoice-detail-void-btn"
+              >
+                Void invoice
+              </Button>
             )}
-            {status === "voided" && <p className="text-sm text-muted-foreground">Voided invoice is read-only.</p>}
             {status === "consolidated" && (
               <p className="text-sm text-muted-foreground">
                 Consolidated invoice is read-only. Its balance was moved to a merged invoice.
@@ -771,7 +750,7 @@ export default function InvoiceDetailPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setExternalPayOpen(null)}>Cancel</Button>
-            <Button onClick={doRecordExternal} disabled={externalPay.isPending}>{externalPay.isPending ? "Saving..." : "Confirm"}</Button>
+            <Button onClick={doRecordExternal} disabled={externalPaySubmitting}>{externalPaySubmitting ? "Saving..." : "Confirm"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -779,50 +758,17 @@ export default function InvoiceDetailPage() {
       <DuplicatePaymentConfirmDialog
         open={!!duplicatePayment}
         duplicate={duplicatePayment}
-        submitting={externalPay.isPending}
+        submitting={externalPaySubmitting}
         onConfirm={() => submitExternal(true)}
         onCancel={() => setDuplicatePayment(null)}
       />
 
-      <Dialog open={voidBlockedOpen} onOpenChange={setVoidBlockedOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invoice has payments</DialogTitle>
-            <DialogDescription>
-              Voiding will not automatically refund the wallet. Use Cancel &amp; refund or Revert payment first.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVoidBlockedOpen(false)}>Close</Button>
-            <Button onClick={() => { setVoidBlockedOpen(false); setCancelOpen(true); }}>Cancel &amp; refund</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Cancel & refund</DialogTitle></DialogHeader>
-          <div className="space-y-2 text-sm">
-            <Label>Service start date</Label>
-            <Input type="date" value={serviceStart} onChange={(e) => setServiceStart(e.target.value)} />
-            {refundPreview.data && (
-              <div className="rounded-md border bg-muted/40 p-3">
-                <p className="font-medium">{refundPreview.data.policy_label}</p>
-                <p>{refundPreview.data.hours_notice.toFixed(0)}h notice · {refundPreview.data.refund_pct}% · {aed(refundPreview.data.refund_aed)}</p>
-              </div>
-            )}
-            <Label>Refund amount</Label>
-            <Input type="number" min="0" step="0.01" value={refundAmount} onChange={(e) => setRefundAmount(e.target.value)} />
-            <Label>Note</Label>
-            <Textarea value={refundNote} onChange={(e) => setRefundNote(e.target.value)} />
-            <StaffNameSelect value={performedBy} onChange={setPerformedBy} />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelOpen(false)}>Cancel</Button>
-            <Button onClick={doCancelRefund}>Confirm</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <VoidInvoiceDialog
+        open={voidOpen}
+        invoiceId={inv.id}
+        onOpenChange={setVoidOpen}
+        onCompleted={() => void refetch()}
+      />
 
       <Dialog open={revertOpen} onOpenChange={setRevertOpen}>
         <DialogContent>

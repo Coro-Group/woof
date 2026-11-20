@@ -12,4 +12,5 @@ export function invalidateOwnerStatementQueries(
   queryClient.invalidateQueries({ queryKey: ["statement", ownerId] });
   queryClient.invalidateQueries({ queryKey: ["owner_wallet", ownerId] });
   queryClient.invalidateQueries({ queryKey: ["wallet_transactions", ownerId] });
+  queryClient.invalidateQueries({ queryKey: ["account-balance", ownerId] });
 }

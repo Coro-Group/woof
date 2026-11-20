@@ -4,26 +4,16 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { invalidateServiceRatesQueries } from "@/lib/billingQueryKeys";
-import {
-  useRefundWallet,
-  walletQueryKeys,
-  type WalletMutationPayload,
-} from "@/hooks/useWallet";
+import { walletQueryKeys } from "@/hooks/useWallet";
 import {
   invoicePaymentMethodToTransactionType,
 } from "@/lib/paymentMethod";
 import { invoiceDueDateToday } from "@/lib/invoiceDueDate";
-import {
-  invoiceAmountDue,
-  invoiceDisplayTotals,
-  netFromGrossInclusive,
-  vatAmountFromGrossInclusive,
-} from "@/lib/vatConfig";
+import { netFromGrossInclusive, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
 import { formatAed, roundAed, AED_DECIMAL_DIGITS } from "@/lib/money";
 import { payInvoiceFromWallet } from "@/lib/walletInvoicePayment";
 import { invalidateOwnerStatementQueries } from "@/lib/statementQueryKeys";
 import { deriveOwnerBalances } from "@/lib/ownerBalances";
-import { useLedgerClosing } from "@/hooks/useLedgerClosing";
 import { useStatementOfAccount } from "@/hooks/useStatement";
 import {
   recordExternalInvoicePayment,
@@ -148,14 +138,6 @@ export interface BillingAdjustment {
   created_at: string;
 }
 
-export interface CancellationRefund {
-  hoursNotice: number;
-  refundPct: number;
-  refundAed: number;
-  overrideActive: boolean;
-  policyLabel: string;
-}
-
 // ── Formatting helper ────────────────────────────────────────────────────────
 
 export { formatAed, roundAed, AED_DECIMAL_DIGITS };
@@ -176,11 +158,6 @@ export const billingKeys = {
   statement: (ownerId: string) => ["statement", ownerId] as const,
   adjustments: (ownerId?: string) =>
     ["billing_adjustments", ownerId ?? "all"] as const,
-  cancellationRefund: (
-    ownerId: string | null,
-    invoiceId: string | null,
-    serviceStart: string | null,
-  ) => ["cancellation_refund", ownerId, invoiceId, serviceStart] as const,
 };
 
 function invalidateAfterInvoicePayment(
@@ -623,7 +600,9 @@ export function useProcessPayment() {
         });
 
         if (result.success) {
-          if (result.partial) {
+          if ((result.amountCharged ?? 0) <= 0) {
+            toast.success("Invoice already matches the discounted total. Nothing more was charged.");
+          } else if (result.partial) {
             toast.success(
               `${formatAed(result.amountCharged)} deducted from wallet — ${formatAed(result.shortfall ?? 0)} still outstanding`,
             );
@@ -701,132 +680,6 @@ export function useProcessPayment() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Hook 6: useVoidInvoice
-// ═══════════════════════════════════════════════════════════════════════════════
-
-interface VoidInvoiceInput {
-  invoiceId: string;
-  reason: string;
-  refundAmount: number;
-  staffName: string;
-}
-
-export function useVoidInvoice() {
-  const queryClient = useQueryClient();
-  const refundWallet = useRefundWallet();
-
-  return useMutation({
-    mutationFn: async (
-      input: VoidInvoiceInput,
-    ): Promise<{ success: boolean; refundAed: number }> => {
-      const { data: invoice, error: fetchErr } = await supabase
-        .from("invoices")
-        .select("owner_id, total, vat_aed, service_type, notes")
-        .eq("id", input.invoiceId)
-        .single();
-      if (fetchErr) throw fetchErr;
-
-      const { error: voidErr } = await supabase
-        .from("invoices")
-        .update({
-          status: "cancelled" as const,
-          notes: input.reason,
-        })
-        .eq("id", input.invoiceId);
-      if (voidErr) throw voidErr;
-
-      if (input.refundAmount > 0) {
-        const payload: WalletMutationPayload = {
-          owner_id: invoice.owner_id,
-          amount: input.refundAmount,
-          notes: input.reason,
-          reference_id: input.invoiceId,
-          reference_type: "invoice_void",
-        };
-        await refundWallet.mutateAsync(payload);
-      }
-
-      await supabase.from("billing_adjustments").insert({
-        owner_id: invoice.owner_id,
-        invoice_id: input.invoiceId,
-        adjustment_type: "cancellation_refund",
-        original_amount: invoiceAmountDue({
-          total: invoice.total,
-          vat_aed: invoice.vat_aed,
-          service_type: invoice.service_type,
-          notes: invoice.notes,
-        }),
-        adjusted_amount: input.refundAmount,
-        reason: input.reason,
-        approved_by: input.staffName,
-      });
-
-      if (input.refundAmount > 0) {
-        toast.success(
-          `Invoice voided. ${formatAed(input.refundAmount)} refunded to wallet.`,
-        );
-      } else {
-        toast.success("Invoice voided. No refund applied.");
-      }
-
-      return { success: true, refundAed: input.refundAmount };
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["owners"] });
-      queryClient.invalidateQueries({ queryKey: ["wallet_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["billing_adjustments"] });
-    },
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Hook 7: useCalculateCancellationRefund
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export function useCalculateCancellationRefund(
-  ownerId: string | null,
-  invoiceId: string | null,
-  serviceStart: string | null,
-): { data: CancellationRefund | null; isLoading: boolean } {
-  const query = useQuery({
-    queryKey: billingKeys.cancellationRefund(ownerId, invoiceId, serviceStart),
-    enabled: !!ownerId && !!invoiceId && !!serviceStart,
-    queryFn: async () => {
-      const { data, error } = await supabase.rpc(
-        "calculate_cancellation_refund",
-        {
-          p_owner_id: ownerId!,
-          p_invoice_id: invoiceId!,
-          p_service_start: serviceStart!,
-        },
-      );
-      if (error) throw error;
-
-      const row = (data as {
-        hours_notice: number;
-        refund_pct: number;
-        refund_aed: number;
-        override_active: boolean;
-        policy_label: string;
-      }[])?.[0];
-
-      if (!row) return null;
-
-      return {
-        hoursNotice: row.hours_notice,
-        refundPct: row.refund_pct,
-        refundAed: row.refund_aed,
-        overrideActive: row.override_active,
-        policyLabel: row.policy_label,
-      } satisfies CancellationRefund;
-    },
-  });
-
-  return { data: query.data ?? null, isLoading: query.isLoading };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // Hook 8: useWalletTopUp — re-export from useWallet.ts
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -839,16 +692,37 @@ export { useTopUpWallet as useWalletTopUp } from "@/hooks/useWallet";
 export function useOwnerBalances(ownerId: string) {
   const queryClient = useQueryClient();
   const statementQuery = useStatementOfAccount(ownerId);
-  const closingQuery = useLedgerClosing(ownerId);
+  const ownerWalletQuery = useQuery({
+    queryKey: ["owner_wallet", ownerId],
+    enabled: !!ownerId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("owners")
+        .select("wallet_balance")
+        .eq("id", ownerId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+  });
 
   const invoices = statementQuery.data ?? [];
-  const k = closingQuery.data ?? 0;
-  const balances = deriveOwnerBalances(k, invoices);
+  const walletBalance = ownerWalletQuery.data?.wallet_balance ?? 0;
+  // MSH-style net: wallet_balance − open invoice remainders (not ledger K).
+  const balances = deriveOwnerBalances(walletBalance, invoices);
 
-  const payAllOutstanding = async (performedBy = "bulk_payment") => {
-    const unpaid = [...invoices].sort((a, b) =>
+  const payAllOutstanding = async (
+    performedBy = "bulk_payment",
+    options?: { invoiceIds?: string[] },
+  ) => {
+    let unpaid = [...invoices].sort((a, b) =>
       (a.due_date || a.created_at).localeCompare(b.due_date || b.created_at),
     );
+
+    if (options?.invoiceIds) {
+      const allow = new Set(options.invoiceIds);
+      unpaid = unpaid.filter((inv) => allow.has(inv.invoice_id));
+    }
 
     let cleared = 0;
     let totalDeducted = 0;
@@ -890,8 +764,8 @@ export function useOwnerBalances(ownerId: string) {
     balances,
     invoices,
     payAllOutstanding,
-    isLoading: statementQuery.isLoading || closingQuery.isLoading,
-    error: statementQuery.error || closingQuery.error,
+    isLoading: statementQuery.isLoading || ownerWalletQuery.isLoading,
+    error: statementQuery.error || ownerWalletQuery.error,
   };
 }
 

@@ -23,6 +23,7 @@ import {
 } from "@/lib/daycareSessionMeta";
 import { HOURLY_PLACEHOLDER_SERVICE_TYPE } from "@/lib/daycareHourlyDraftInvoice";
 import { recalculateInvoiceTotals } from "@/lib/invoiceRecalc";
+import { invoiceWalletBalanceDue } from "@/lib/invoiceWalletCharge";
 import {
   buildPriceMap,
   daycareHourlyInvoiceLineUnits,
@@ -157,10 +158,17 @@ export function CompleteHourlyBillingDialog({
   const openPaymentForInvoice = async (invoiceId: string) => {
     const { data: inv } = await supabase
       .from("invoices")
-      .select("total, amount_paid")
+      .select("total, subtotal, discount_amount, amount_paid")
       .eq("id", invoiceId)
       .maybeSingle();
-    const remaining = Math.max(0, (inv?.total ?? 0) - (inv?.amount_paid ?? 0));
+    const remaining = inv
+      ? invoiceWalletBalanceDue({
+          total: inv.total ?? 0,
+          subtotal: inv.subtotal ?? 0,
+          discountAmount: inv.discount_amount ?? 0,
+          amountPaid: inv.amount_paid ?? 0,
+        })
+      : 0;
     if (remaining > 0) {
       setPayInvoice({ id: invoiceId, total: remaining });
       setPayOpen(true);

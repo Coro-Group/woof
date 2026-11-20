@@ -3,19 +3,15 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { deriveInvoiceStatusAfterRecalc } from "@/lib/boardingInvoiceLineUtils";
 import { isInactiveInvoiceStatus } from "@/lib/invoiceStatus";
+import { amountPaidFromPaymentRows } from "@/lib/amountPaidFromPayments";
 import { roundAed } from "@/lib/money";
 import { invoiceDisplayTotals, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
+
+export { amountPaidFromPaymentRows } from "@/lib/amountPaidFromPayments";
 
 type InvoiceRow = Database["public"]["Tables"]["invoices"]["Row"];
 type LineRow = Database["public"]["Tables"]["invoice_line_items"]["Row"];
 type AdjustmentRow = Database["public"]["Tables"]["billing_adjustments"]["Row"];
-
-const PAYMENT_TX_TYPES = new Set([
-  "cash_payment",
-  "card_payment",
-  "bank_transfer_payment",
-  "deduction",
-]);
 
 const DISCOUNT_ADJUSTMENT_TYPES = new Set([
   "discount_override",
@@ -45,86 +41,37 @@ export function canDeleteInvoiceAdjustments(status: string): boolean {
   return !isInactiveInvoiceStatus(status) && status !== "paid";
 }
 
-function totalsFromLines(
-  lines: Pick<LineRow, "quantity" | "unit_price">[],
-  discountAmount: number,
-): { subtotal: number; grossTotal: number; vatAed: number } {
-  const subtotal = lines.reduce(
-    (s, li) => s + li.unit_price * Math.max(1, li.quantity),
-    0,
-  );
-  const grossTotal = Math.max(0, roundAed(subtotal - discountAmount));
-  const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  return { subtotal: roundAed(subtotal), grossTotal, vatAed };
-}
-
-async function effectiveAmountPaid(
-  invoice: InvoiceRow,
+/** Shared by invoiceRecalc + boardingInvoiceSync. */
+export async function resolveInvoiceAmountPaid(
+  invoice: Pick<InvoiceRow, "id" | "amount_paid">,
   client: SupabaseClient<Database> = supabase,
 ): Promise<number> {
-  const stored = roundAed(invoice.amount_paid ?? 0);
   const { data, error } = await client
-    .from("wallet_transactions")
-    .select("amount, transaction_type")
+    .from("invoice_payments")
+    .select("amount")
     .eq("invoice_id", invoice.id);
   if (error) throw error;
-
-  const fromTx = (data ?? []).reduce((sum, row) => {
-    if (!PAYMENT_TX_TYPES.has(row.transaction_type)) return sum;
-    return sum + Math.abs(Number(row.amount) || 0);
-  }, 0);
-
-  return roundAed(Math.max(stored, fromTx));
+  return amountPaidFromPaymentRows(
+    invoice.amount_paid,
+    (data ?? []).map((r) => Number(r.amount) || 0),
+  );
 }
 
-/** Recompute invoice header totals from line items; preserves discount_amount. */
+/**
+ * Recompute header totals from the current lines without dropping an approved
+ * discount. The database function re-applies a percent to the new subtotal,
+ * keeps a fixed AED discount (capped at the new subtotal), recomputes VAT,
+ * and writes an amendment when the discount amount changes.
+ */
 export async function recalculateInvoiceTotals(
   invoiceId: string,
   client: SupabaseClient<Database> = supabase,
 ): Promise<void> {
-  const { data: invoice, error: invErr } = await client
-    .from("invoices")
-    .select("*")
-    .eq("id", invoiceId)
-    .single();
-  if (invErr) throw invErr;
-
-  const { data: lines, error: linesErr } = await client
-    .from("invoice_line_items")
-    .select("quantity, unit_price")
-    .eq("invoice_id", invoiceId);
-  if (linesErr) throw linesErr;
-
-  const discountAmount = roundAed(invoice.discount_amount ?? 0);
-  const { subtotal, grossTotal, vatAed } = totalsFromLines(lines ?? [], discountAmount);
-  const amountPaid = await effectiveAmountPaid(invoice, client);
-  const { grandTotal } = invoiceDisplayTotals({
-    total: grossTotal,
-    vat_aed: vatAed,
+  const { error } = await client.rpc("reapply_invoice_discount", {
+    p_invoice_id: invoiceId,
+    p_amended_by: "system",
   });
-  const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
-
-  const updatePayload: Database["public"]["Tables"]["invoices"]["Update"] = {
-    subtotal,
-    total: grossTotal,
-    vat_aed: vatAed,
-    status: status as Database["public"]["Enums"]["invoice_status"],
-    amount_paid: amountPaid,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (status === "paid" && !invoice.paid_at) {
-    updatePayload.paid_at = new Date().toISOString();
-  }
-  if (status !== "paid") {
-    updatePayload.paid_at = null;
-  }
-
-  const { error: updErr } = await client
-    .from("invoices")
-    .update(updatePayload)
-    .eq("id", invoiceId);
-  if (updErr) throw updErr;
+  if (error) throw error;
 }
 
 function lineAmounts(lines: Pick<LineRow, "quantity" | "unit_price" | "total_price" | "line_total">[]) {
@@ -192,7 +139,7 @@ export async function syncInvoiceDiscountTotals(invoiceId: string): Promise<void
   const discountAmount = roundAed(lineDiscount + adjustmentDiscountTotal(adjustments ?? []));
   const grossTotal = Math.max(0, roundAed(lineSubtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  const amountPaid = await effectiveAmountPaid(invoice);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice);
   const { grandTotal } = invoiceDisplayTotals({ total: grossTotal, vat_aed: vatAed });
   const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
 
@@ -250,7 +197,7 @@ export async function applyInvoiceDiscountAdjustment(
       : roundAed(lineDiscount + adjustmentDiscount);
   const grossTotal = Math.max(0, roundAed(lineSubtotal - discountAmount));
   const vatAed = vatAmountFromGrossInclusive(grossTotal);
-  const amountPaid = await effectiveAmountPaid(invoice);
+  const amountPaid = await resolveInvoiceAmountPaid(invoice);
   const { grandTotal } = invoiceDisplayTotals({ total: grossTotal, vat_aed: vatAed });
   const status = deriveInvoiceStatusAfterRecalc(invoice.status, amountPaid, grandTotal);
 

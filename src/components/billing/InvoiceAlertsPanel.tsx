@@ -130,15 +130,20 @@ export function InvoiceAlertsPanel({ className }: { className?: string }) {
 
   if (isLoading || !data) return null;
 
-  const { staleDrafts, overdue, depositBypassed, multipleUnpaid } = data;
+  const { staleDrafts, overdue, depositBypassed, multipleUnpaid, paidWithoutSettlement } =
+    data;
   const totalAlerts =
-    staleDrafts.length + overdue.length + depositBypassed.length + multipleUnpaid.length;
+    staleDrafts.length +
+    overdue.length +
+    depositBypassed.length +
+    multipleUnpaid.length +
+    paidWithoutSettlement.length;
 
   if (totalAlerts === 0) return null;
 
   return (
     <div
-      className={cn("grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4", className)}
+      className={cn("grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3", className)}
       data-testid="dashboard-invoice-alerts"
     >
       <AlertCard
@@ -243,6 +248,33 @@ export function InvoiceAlertsPanel({ className }: { className?: string }) {
               </span>
             </Link>
           ))
+        )}
+      </AlertCard>
+
+      <AlertCard
+        title="Paid without settlement"
+        count={paidWithoutSettlement.length}
+        tone="orange"
+        icon={<AlertTriangle className="h-4 w-4" />}
+        testId="dashboard-alert-paid-without-settlement"
+        defaultOpen={paidWithoutSettlement.length > 0}
+      >
+        {paidWithoutSettlement.length === 0 ? (
+          <p className="text-xs text-muted-foreground">None flagged.</p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground mb-1.5">
+              Status is paid but amount_paid is 0 and there are no payment rows. Confirm the
+              correct settlement amount before backfilling — do not change status yet.
+            </p>
+            {paidWithoutSettlement.map((row) => (
+              <InvoiceRowLink
+                key={row.id}
+                row={row}
+                trailing={formatAed(row.total)}
+              />
+            ))}
+          </>
         )}
       </AlertCard>
     </div>

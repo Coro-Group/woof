@@ -14,6 +14,7 @@ export type GroomingService = Database["public"]["Enums"]["grooming_service"];
 export const GROOMING_SERVICE_OPTIONS: { value: GroomingService; label: string }[] = [
   { value: "full_groom", label: "Full Groom" },
   { value: "full_bath", label: "Full Bath" },
+  { value: "splash", label: "Splash" },
   { value: "tidy", label: "Tidy" },
   { value: "nail_clip", label: "Nail Clip" },
   { value: "gland_expression", label: "Anal Gland Expression" },

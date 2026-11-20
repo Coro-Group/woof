@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   clampHeavyDogFeeAed,
   clampMattingFeeAed,
+  combineGroomingAppointmentQuote,
+  GROOMING_FORM_ADDON_SERVICE_CODE,
   isGroomingPricingCheckbox,
   resolvePrimaryGroomingCheckbox,
   groomingPricingCheckboxToDbService,
@@ -33,15 +35,42 @@ describe("groomingNewAppointmentPricing", () => {
     expect(groomingPricingCheckboxToDbService("nail_clip")).toBe("nail_clip");
     expect(groomingPricingCheckboxToDbService("tidy")).toBe("tidy");
     expect(groomingPricingCheckboxToDbService("gland_expression")).toBe("gland_expression");
+    expect(groomingPricingCheckboxToDbService("splash")).toBe("splash");
   });
 
-  it("resolvePrimaryGroomingCheckbox includes tidy in base priority", () => {
+  it("resolvePrimaryGroomingCheckbox includes tidy and splash in base priority", () => {
     expect(resolvePrimaryGroomingCheckbox(["nail_clip", "tidy"])).toBe("tidy");
+    expect(resolvePrimaryGroomingCheckbox(["nail_clip", "splash"])).toBe("splash");
   });
 
   it("clampMattingFeeAed respects bounds", () => {
     expect(clampMattingFeeAed(50, { mattingMin: 10, mattingMax: 40 })).toBe(40);
     expect(clampMattingFeeAed(5, { mattingMin: 10, mattingMax: 40 })).toBe(10);
+  });
+
+  it("prices a standalone gland visit from the resolved service rate", () => {
+    expect(GROOMING_FORM_ADDON_SERVICE_CODE.gland_standalone).toBe("grooming_gland_expression");
+    expect(combineGroomingAppointmentQuote(0, [10])).toEqual({
+      base: 0,
+      addons: 10,
+      total: 10,
+    });
+  });
+
+  it("uses the glands add-on code beside a package and leaves an unrated add-on out", () => {
+    expect(GROOMING_FORM_ADDON_SERVICE_CODE.gland_with_package).toBe("addon_glands");
+    expect(GROOMING_FORM_ADDON_SERVICE_CODE.ear_cleaning).toBe("addon_ear_cleaning");
+    expect(GROOMING_FORM_ADDON_SERVICE_CODE.paw_wash).toBe("addon_paw_wash");
+    expect(GROOMING_FORM_ADDON_SERVICE_CODE.paw_brushing).toBe("addon_paw_brushing");
+    expect(combineGroomingAppointmentQuote(100, [7, null])).toEqual({
+      base: 100,
+      addons: 7,
+      total: 107,
+    });
+  });
+
+  it("asks for a manual price when the only selected add-on has no rate", () => {
+    expect(combineGroomingAppointmentQuote(0, [null])).toBeNull();
   });
 
   it("clampHeavyDogFeeAed respects bounds", () => {

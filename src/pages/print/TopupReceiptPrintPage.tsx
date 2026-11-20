@@ -28,10 +28,8 @@ const RECEIPT_SELECT =
   "id, amount, receipt_number, issued_at, issued_by, notes, owner_id, wallet_transaction_id, owners(first_name, last_name, phone, email)";
 
 /**
- * Looks the receipt up by its own id first, then falls back to the wallet
- * transaction id. The wallet-transaction fallback supports the print link
- * opened right after a top-up, when only the transaction id is known and the
- * receipt row may have just been written.
+ * Primary lookup by receipt PK. Legacy fallback by wallet_transaction_id for
+ * old print links that opened with the WT id before receipt_id was returned.
  */
 async function fetchTopupReceipt(idOrTxId: string): Promise<TopupReceiptRow | null> {
   const byId = await supabase
@@ -42,6 +40,7 @@ async function fetchTopupReceipt(idOrTxId: string): Promise<TopupReceiptRow | nu
   if (byId.error) throw byId.error;
   if (byId.data) return byId.data as TopupReceiptRow;
 
+  // Legacy: URL used wallet_transaction_id instead of receipt id
   const byTx = await supabase
     .from("wallet_topup_receipts")
     .select(RECEIPT_SELECT)
@@ -64,18 +63,24 @@ function fmtDate(value: string | null): string {
 
 export default function TopupReceiptPrintPage() {
   const { receiptId } = useParams<{ receiptId: string }>();
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, isPending } = useQuery({
     queryKey: ["print", "topup-receipt", receiptId],
     enabled: !!receiptId,
     queryFn: () => fetchTopupReceipt(receiptId!),
-    // The receipt row is written best-effort just after the top-up; retry so a
-    // print link opened immediately still resolves once the write lands.
+    // Legacy WT-id links / brief replication lag: retry until the row appears.
     retry: 4,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
   });
 
+  // Gate Print on receipt row presence — not merely logo load.
+  const receiptReady = !!data && !isPending;
+
   return (
-    <PrintLayout imageUrls={["/woof-logo.png"]}>
+    <PrintLayout
+      imageUrls={["/woof-logo.png"]}
+      contentReady={receiptReady}
+      contentLoadingLabel="Loading receipt..."
+    >
       {isLoading ? <p className="print-sans text-sm">Loading receipt...</p> : null}
       {error ? (
         <p className="print-sans text-sm text-red-700">Could not load this receipt.</p>

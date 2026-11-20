@@ -169,6 +169,7 @@ import { activeLinkedStayLabel } from "@/lib/groomingBoardUi";
 const SERVICE_BADGE: Record<GroomingService, string> = {
   full_groom: "bg-purple-100 text-purple-800 border-purple-200",
   full_bath: "bg-blue-100 text-blue-800 border-blue-200",
+  splash: "bg-cyan-100 text-cyan-800 border-cyan-200",
   tidy: "bg-sky-100 text-sky-800 border-sky-200",
   nail_clip: "bg-emerald-100 text-emerald-800 border-emerald-200",
   gland_expression: "bg-lime-100 text-lime-800 border-lime-200",

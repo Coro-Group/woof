@@ -1,5 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { computePeriodTotals } from "@/lib/ownerBalances";
+import {
+  computePeriodTotals,
+  deriveOwnerBalances,
+  canPayAllFromWalletBalance,
+} from "@/lib/ownerBalances";
+import type { StatementRow } from "@/hooks/useStatement";
+
+function openInv(total: number, status = "outstanding"): StatementRow {
+  return {
+    invoice_id: "x",
+    invoice_number: "INV",
+    service_type: "boarding",
+    status,
+    total,
+    created_at: "2026-01-01",
+    due_date: "2026-01-01",
+    days_overdue: 0,
+  };
+}
+
+describe("deriveOwnerBalances (MSH-style net)", () => {
+  it("nets wallet_balance minus open invoice remainders", () => {
+    const b = deriveOwnerBalances(1814.9, [openInv(588)]);
+    expect(b.netPosition).toBe(1226.9);
+    expect(b.invoiceRemainingTotal).toBe(588);
+    expect(b.outstandingDebt).toBe(0);
+    expect(b.combinedWallet).toBe(1814.9);
+    expect(b.canPayAll).toBe(true);
+  });
+
+  it("shows negative net when open invoices exceed wallet", () => {
+    const b = deriveOwnerBalances(100, [openInv(588)]);
+    expect(b.netPosition).toBe(-488);
+    expect(b.outstandingDebt).toBe(488);
+    expect(b.invoiceRemainingTotal).toBe(588);
+    expect(b.canPayAll).toBe(false);
+    expect(b.combinedWallet).toBe(100);
+  });
+
+  it("ignores paid statuses in the open-invoice sum", () => {
+    const b = deriveOwnerBalances(500, [
+      openInv(200, "paid"),
+      openInv(50, "outstanding"),
+    ]);
+    expect(b.invoiceRemainingTotal).toBe(50);
+    expect(b.netPosition).toBe(450);
+  });
+});
+
+describe("canPayAllFromWalletBalance", () => {
+  it("requires wallet cash to cover open remainders", () => {
+    expect(canPayAllFromWalletBalance(588, 588)).toBe(true);
+    expect(canPayAllFromWalletBalance(587.99, 588)).toBe(false);
+    expect(canPayAllFromWalletBalance(1000, 0)).toBe(false);
+  });
+});
 
 describe("computePeriodTotals", () => {
   it("chains balances over visible rows so debits reconcile with net movement", () => {

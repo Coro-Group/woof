@@ -18,8 +18,6 @@ import {
   useCreateInvoice,
   useCollectPayment,
   useProcessPayment,
-  useVoidInvoice,
-  useCalculateCancellationRefund,
   useOwnerBalances,
   usePricing,
   formatAed,
@@ -29,6 +27,7 @@ import {
   type ServiceType,
 } from "@/hooks/useBilling";
 import { invoiceDiscountPercent, invoiceDisplayTotals, vatLineLabel } from "@/lib/vatConfig";
+import { invoiceWalletBalanceDue, invoiceWalletChargeTotal } from "@/lib/invoiceWalletCharge";
 import { formatWalletAed } from "@/lib/money";
 import {
   INVOICE_PAYMENT_METHOD_OPTIONS,
@@ -44,8 +43,13 @@ import type { DuplicatePaymentInfo } from "@/lib/recordExternalInvoicePayment";
 import { canConsolidateInvoiceStatus } from "@/lib/invoiceConsolidation";
 import { ownerHasWalletCredit, ownerWalletCredit } from "@/lib/walletCredit";
 import { canDeleteInvoiceLineItems, canEditInvoiceLineItems } from "@/lib/invoiceRecalc";
+import {
+  bulkWalletPayableTotal,
+  filterBulkWalletPayableInvoices,
+} from "@/lib/bulkWalletPayEligibility";
 import { AddInvoiceLineItemDialog } from "@/components/billing/AddInvoiceLineItemDialog";
 import { DeleteInvoiceLineItemDialog } from "@/components/billing/DeleteInvoiceLineItemDialog";
+import { VoidInvoiceDialog } from "@/components/billing/VoidInvoiceDialog";
 import { InvoiceDeletionLogPanel } from "@/components/billing/InvoiceDeletionLogPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -187,13 +191,13 @@ function WalletModal({ open, mode, ownerId, onClose }: WalletModalProps) {
       : `AED ${numAmount.toFixed(2)} deducted from wallet`;
     mutation.mutate(payload, {
       onSuccess: (data) => {
-        if (mode === "topup" && data?.id) {
+                if (mode === "topup" && data?.receipt_id) {
           toast.success(successMsg, {
             action: {
               label: "Print receipt",
               onClick: () =>
                 window.open(
-                  `/print/topup-receipt/${data.id}`,
+                  `/print/topup-receipt/${data.receipt_id}`,
                   "_blank",
                   "noopener,noreferrer",
                 ),
@@ -279,13 +283,17 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
 
   const walletBalance = ownerWalletCredit(owner?.wallet_balance);
 
-  const pay = invoiceDisplayTotals({
-    total: invoice.total,
-    vat_aed: invoice.vat_aed,
-    service_type: invoice.service_type,
-    notes: invoice.notes,
+  const chargeTotal = invoiceWalletChargeTotal({
+    total: invoice.total ?? 0,
+    subtotal: invoice.subtotal ?? 0,
+    discountAmount: invoice.discount_amount ?? 0,
   });
-  const outstanding = Math.max(0, pay.grandTotal - (invoice.amount_paid ?? 0));
+  const outstanding = invoiceWalletBalanceDue({
+    total: invoice.total ?? 0,
+    subtotal: invoice.subtotal ?? 0,
+    discountAmount: invoice.discount_amount ?? 0,
+    amountPaid: invoice.amount_paid ?? 0,
+  });
 
   const submitPayment = async (
     paymentMethod: BillingPaymentMethod = method,
@@ -338,7 +346,7 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
         </DialogHeader>
         <div className="space-y-4 mt-2">
           <div className="rounded-md border p-3 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-muted-foreground">Grand total</span><span>{formatAed(pay.grandTotal)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Grand total</span><span>{formatAed(chargeTotal)}</span></div>
             <div className="flex justify-between font-semibold border-t pt-1"><span>Outstanding</span><span>{formatAed(outstanding)}</span></div>
           </div>
           <div className="space-y-2">
@@ -409,95 +417,6 @@ function PaymentDialog({ open, invoice, onClose }: { open: boolean; invoice: Inv
       }}
     />
     </>
-  );
-}
-
-// ── VoidDialog ───────────────────────────────────────────────────────────────
-
-function VoidDialog({ open, invoice, ownerId, onClose }: { open: boolean; invoice: InvoiceWithItems | null; ownerId: string; onClose: () => void }) {
-  const voidInvoice = useVoidInvoice();
-  const [reason, setReason] = useState("");
-  const [staffName, setStaffName] = useState("");
-  const [refundAmount, setRefundAmount] = useState("0");
-
-  const { data: refundCalc } = useCalculateCancellationRefund(
-    ownerId,
-    invoice?.id ?? null,
-    invoice?.created_at ?? null,
-  );
-
-  useEffect(() => {
-    if (refundCalc) setRefundAmount(refundCalc.refundAed.toFixed(2));
-  }, [refundCalc]);
-
-  if (!invoice) return null;
-
-  const handleVoid = async () => {
-    if (!reason.trim()) { toast.error("Enter a reason"); return; }
-    if (!staffName.trim()) { toast.error("Enter staff name"); return; }
-    await voidInvoice.mutateAsync({
-      invoiceId: invoice.id,
-      reason: reason.trim(),
-      refundAmount: parseFloat(refundAmount) || 0,
-      staffName: staffName.trim(),
-    });
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-destructive">
-            <Ban className="h-5 w-5" /> Void Invoice
-          </DialogTitle>
-          <DialogDescription>
-            Invoice {invoice.invoice_number ?? invoice.id.slice(0, 8)} —{" "}
-            {formatAed(
-              invoiceDisplayTotals({
-                total: invoice.total,
-                vat_aed: invoice.vat_aed,
-                service_type: invoice.service_type,
-                notes: invoice.notes,
-              }).grandTotal,
-            )}{" "}
-            incl. VAT
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 mt-2">
-          {refundCalc && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-1">
-              <p className="font-medium text-amber-900">{refundCalc.policyLabel}</p>
-              <p className="text-amber-700">
-                {refundCalc.hoursNotice.toFixed(0)}h notice — {refundCalc.refundPct}% refund = {formatAed(refundCalc.refundAed)}
-              </p>
-              {refundCalc.overrideActive && (
-                <p className="text-amber-800 font-medium">Full refund override active for this owner</p>
-              )}
-            </div>
-          )}
-          <div className="space-y-2">
-            <Label>Refund amount (AED)</Label>
-            <Input type="number" min="0" step="0.01" value={refundAmount} onChange={(e) => setRefundAmount(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label>Reason <span className="text-destructive">*</span></Label>
-            <Textarea rows={2} placeholder="Why is this invoice being voided?" value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label>Approved by <span className="text-destructive">*</span></Label>
-            <Input placeholder="Staff name" value={staffName} onChange={(e) => setStaffName(e.target.value)} />
-          </div>
-        </div>
-        <DialogFooter className="gap-2 pt-4">
-          <Button variant="outline" onClick={onClose} disabled={voidInvoice.isPending}>Cancel</Button>
-          <Button variant="destructive" disabled={voidInvoice.isPending} onClick={handleVoid}>
-            {voidInvoice.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Void Invoice
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -929,6 +848,20 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
 
   const ownerBalances = useOwnerBalances(ownerId);
   const [payAllPending, setPayAllPending] = useState(false);
+  const [payAllConfirmOpen, setPayAllConfirmOpen] = useState(false);
+
+  const bulkPayableInvoices = useMemo(
+    () => filterBulkWalletPayableInvoices(ownerBalances.invoices),
+    [ownerBalances.invoices],
+  );
+  const bulkPayableTotal = useMemo(
+    () => bulkWalletPayableTotal(bulkPayableInvoices),
+    [bulkPayableInvoices],
+  );
+  const skippedFutureBoardingCount = Math.max(
+    0,
+    ownerBalances.invoices.length - bulkPayableInvoices.length,
+  );
 
   const consolidatableCount = useMemo(
     () => invoices.filter((inv) => canConsolidateInvoiceStatus(inv.status)).length,
@@ -1010,25 +943,71 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
           </Button>
         )}
 
-        {ownerBalances.invoiceRemainingTotal > 0 && ownerBalances.combinedWallet > 0 && (
+        {bulkPayableTotal > 0 && ownerBalances.combinedWallet > 0 && (
           <Button
             size="sm"
             variant="outline"
             disabled={payAllPending}
-            onClick={async () => {
-              setPayAllPending(true);
-              try {
-                await ownerBalances.payAllOutstanding("bulk_payment");
-              } finally {
-                setPayAllPending(false);
-              }
-            }}
+            data-testid="billing-pay-all-outstanding-btn"
+            onClick={() => setPayAllConfirmOpen(true)}
           >
             <CheckCircle2 className="mr-1.5 h-4 w-4" />
-            Pay all outstanding ({formatWalletAed(ownerBalances.invoiceRemainingTotal)})
+            Pay all outstanding ({formatWalletAed(bulkPayableTotal)})
           </Button>
         )}
       </div>
+
+      <AlertDialog open={payAllConfirmOpen} onOpenChange={setPayAllConfirmOpen}>
+        <AlertDialogContent data-testid="billing-pay-all-confirm-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Pay outstanding from wallet?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Apply wallet credit toward{" "}
+                  <span className="font-medium text-foreground">
+                    {bulkPayableInvoices.length} invoice
+                    {bulkPayableInvoices.length !== 1 ? "s" : ""}
+                  </span>{" "}
+                  totaling{" "}
+                  <span className="font-medium text-foreground">
+                    {formatWalletAed(bulkPayableTotal)}
+                  </span>
+                  ? Invoices are paid oldest due date first.
+                </p>
+                {skippedFutureBoardingCount > 0 && (
+                  <p>
+                    {skippedFutureBoardingCount} future-dated boarding invoice
+                    {skippedFutureBoardingCount !== 1 ? "s are" : " is"} skipped — pay
+                    those individually if needed.
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={payAllPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={payAllPending || bulkPayableInvoices.length === 0}
+              data-testid="billing-pay-all-confirm-btn"
+              onClick={(e) => {
+                e.preventDefault();
+                setPayAllPending(true);
+                void ownerBalances
+                  .payAllOutstanding("bulk_payment", {
+                    invoiceIds: bulkPayableInvoices.map((inv) => inv.invoice_id),
+                  })
+                  .finally(() => {
+                    setPayAllPending(false);
+                    setPayAllConfirmOpen(false);
+                  });
+              }}
+            >
+              {payAllPending ? "Processing…" : "Confirm payment"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Invoice list */}
       <Card>
@@ -1058,7 +1037,7 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
                   const sb = INVOICE_STATUS_BADGE[inv.status] ?? INVOICE_STATUS_BADGE.draft;
                   const canFinalise = inv.status === "draft";
                   const canPay = ["finalised", "issued", "outstanding", "overdue", "partially_paid"].includes(inv.status);
-                  const canVoid = !["cancelled", "voided", "consolidated", "paid"].includes(inv.status);
+                  const canVoid = !["cancelled", "voided", "consolidated"].includes(inv.status);
                   const canSelect = canConsolidateInvoiceStatus(inv.status);
                   return (
                     <TableRow key={inv.id}>
@@ -1135,7 +1114,17 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
       </Card>
 
       <PaymentDialog open={!!payInvoice} invoice={payInvoice} onClose={() => setPayInvoice(null)} />
-      <VoidDialog open={!!voidInvoice} invoice={voidInvoice} ownerId={ownerId} onClose={() => setVoidInvoice(null)} />
+      <VoidInvoiceDialog
+        open={!!voidInvoice}
+        invoiceId={voidInvoice?.id ?? null}
+        onOpenChange={(open) => {
+          if (!open) setVoidInvoice(null);
+        }}
+        onCompleted={() => {
+          setVoidInvoice(null);
+          void refetchInvoices();
+        }}
+      />
       <InvoiceDetailDialog
         open={!!viewInvoice}
         invoice={viewInvoice}

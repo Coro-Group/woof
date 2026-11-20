@@ -7,6 +7,7 @@ export const GROOMING_SERVICE_TO_SERVICE_CODE: Record<
 > = {
   full_groom: "grooming_full_service",
   full_bath: "grooming_bath_brush_tidy",
+  splash: "grooming_splash",
   tidy: "grooming_tidy",
   nail_clip: "addon_nails",
   gland_expression: "grooming_gland_expression",

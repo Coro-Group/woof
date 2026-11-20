@@ -4350,6 +4350,10 @@ export type Database = {
         Args: { p_booking_id: string }
         Returns: string
       }
+      reapply_invoice_discount: {
+        Args: { p_amended_by?: string; p_invoice_id: string }
+        Returns: undefined
+      }
       boarding_kennel_occupancy_counts: {
         Args: { p_as_of: string }
         Returns: Json
@@ -4484,6 +4488,21 @@ export type Database = {
           status: string
           total: number
         }[]
+      }
+      insert_invoice_payment: {
+        Args: {
+          p_amount: number
+          p_closing_balance: number
+          p_confirm_duplicate?: boolean
+          p_invoice_id: string
+          p_notes?: string | null
+          p_opening_balance: number
+          p_owner_id: string
+          p_payment_method: Database["public"]["Enums"]["payment_method"]
+          p_recorded_by: string
+          p_wallet_transaction_id?: string | null
+        }
+        Returns: string
       }
       is_boarding_import_placeholder_room: {
         Args: { p_room: Database["public"]["Tables"]["rooms"]["Row"] }
@@ -4633,7 +4652,7 @@ export type Database = {
         }[]
       }
       revoke_daycare_package_credit: {
-        Args: { p_credit_id: string; p_reason?: string }
+        Args: { p_credit_id: string; p_reason?: string; p_staff?: string }
         Returns: {
           credit_id: string
           invoice_voided: boolean
@@ -4641,6 +4660,10 @@ export type Database = {
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+      void_invoice: {
+        Args: { p_invoice: string; p_reason: string; p_staff: string }
+        Returns: number
+      }
       upsert_peak_period: {
         Args: {
           p_end_date?: string
@@ -4838,6 +4861,7 @@ export type Database = {
       grooming_service:
         | "full_groom"
         | "full_bath"
+        | "splash"
         | "nail_clip"
         | "deshedding"
         | "brushing"
@@ -4941,6 +4965,9 @@ export type Database = {
         | "addon_nails"
         | "addon_glands"
         | "grooming_gland_expression"
+        | "addon_ear_cleaning"
+        | "addon_paw_wash"
+        | "addon_paw_brushing"
         | "addon_dematting"
         | "addon_teeth_cleaning"
         | "addon_flea_tick_bath"
@@ -5149,6 +5176,7 @@ export const Constants = {
       grooming_service: [
         "full_groom",
         "full_bath",
+        "splash",
         "nail_clip",
         "deshedding",
         "brushing",
@@ -5257,6 +5285,9 @@ export const Constants = {
         "addon_nails",
         "addon_glands",
         "grooming_gland_expression",
+        "addon_ear_cleaning",
+        "addon_paw_wash",
+        "addon_paw_brushing",
         "addon_dematting",
         "addon_teeth_cleaning",
         "addon_flea_tick_bath",

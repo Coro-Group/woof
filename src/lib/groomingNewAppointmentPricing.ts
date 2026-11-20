@@ -7,6 +7,7 @@ export type GroomingPricingCheckbox =
   | "full_groom"
   | "deshedding"
   | "tidy"
+  | "splash"
   | "bath_only"
   | "full_bath_full"
   | "fur_brushing"
@@ -25,6 +26,7 @@ const ALL_PRICING_CHECKBOXES: readonly GroomingPricingCheckbox[] = [
   "full_groom",
   "deshedding",
   "tidy",
+  "splash",
   "bath_only",
   "full_bath_full",
   "fur_brushing",
@@ -73,15 +75,54 @@ const BASE_PRIORITY: GroomingPricingCheckbox[] = [
   "full_groom",
   "deshedding",
   "tidy",
+  "splash",
   "bath_only",
   "full_bath_full",
 ];
+
+/**
+ * Grooming-form add-ons that resolve through service_rates.
+ * Standalone anal glands use grooming_gland_expression; ticked beside a package
+ * they use addon_glands. Ear cleaning, paw wash, and paw brushing have their
+ * own codes and stay unpriced until a service_rates row exists.
+ */
+export const GROOMING_FORM_ADDON_SERVICE_CODE = {
+  ear_cleaning: "addon_ear_cleaning",
+  paw_wash: "addon_paw_wash",
+  paw_brushing: "addon_paw_brushing",
+  gland_standalone: "grooming_gland_expression",
+  gland_with_package: "addon_glands",
+} as const;
+
+/**
+ * Build the appointment price from a resolved base and add-on lookups.
+ * A null add-on amount means service_rates has no row — it is not treated as
+ * AED 0. When the visit is only those unresolved add-ons, the quote is null
+ * so the form asks for a manual price.
+ */
+export function combineGroomingAppointmentQuote(
+  base: number | null,
+  addonAmounts: ReadonlyArray<number | null>,
+): { base: number; addons: number; total: number } | null {
+  if (base == null) return null;
+  const resolved = addonAmounts.filter((amount): amount is number => typeof amount === "number");
+  if (base === 0 && addonAmounts.length > 0 && resolved.length === 0) return null;
+  const addons = resolved.reduce((sum, amount) => sum + amount, 0);
+  const roundedBase = Number(base.toFixed(3));
+  const roundedAddons = Number(addons.toFixed(3));
+  return {
+    base: roundedBase,
+    addons: roundedAddons,
+    total: Number((roundedBase + roundedAddons).toFixed(3)),
+  };
+}
 
 /** Primary package checkboxes that show live rate hints on the new-appointment form. */
 export const GROOMING_BASE_PACKAGE_CHECKBOXES: readonly GroomingPricingCheckbox[] = [
   "full_groom",
   "deshedding",
   "tidy",
+  "splash",
   "bath_only",
   "full_bath_full",
 ] as const;
@@ -113,6 +154,8 @@ export function groomingPricingCheckboxToDbService(cb: GroomingPricingCheckbox):
       return "deshedding";
     case "tidy":
       return "tidy";
+    case "splash":
+      return "splash";
     case "bath_only":
     case "full_bath_full":
     case "blow_dry":
@@ -136,11 +179,6 @@ export function groomingPricingCheckboxToDbService(cb: GroomingPricingCheckbox):
       return "full_groom";
   }
 }
-
-export {
-  fetchGroomingManualFeeBounds,
-  fetchNewGroomingAppointmentOriginalAed,
-} from "@/lib/groomingNewAppointmentRates";
 
 /** @deprecated Use `fetchNewGroomingAppointmentOriginalAed` (loads live rates). */
 export function computeNewGroomingAppointmentOriginalAed(

@@ -17,6 +17,15 @@ import { recordPayment } from "@/services/invoiceService";
  */
 export const DUPLICATE_PAYMENT_WINDOW_MINUTES = 10;
 
+/** DB hard-reject window (must match trg_reject_short_window_duplicate_invoice_payment). */
+export const DUPLICATE_PAYMENT_HARD_REJECT_SECONDS = 5;
+
+export const DUPLICATE_PAYMENT_REJECTED_MARKER = "DUPLICATE_PAYMENT_REJECTED";
+
+export function isDuplicatePaymentRejectedError(message?: string | null): boolean {
+  return !!message && message.includes(DUPLICATE_PAYMENT_REJECTED_MARKER);
+}
+
 export type DuplicatePaymentInfo = {
   paymentId: string;
   amount: number;
@@ -43,13 +52,18 @@ export type RecordExternalPaymentResult = {
  */
 export async function findRecentDuplicateExternalPayment(
   supabase: SupabaseClient<Database>,
-  params: { invoiceId: string; amountAed: number; windowMinutes?: number },
+  params: {
+    invoiceId: string;
+    amountAed: number;
+    method?: PaymentMethod;
+    windowMinutes?: number;
+  },
 ): Promise<DuplicatePaymentInfo | null> {
   const amount = roundAed(params.amountAed);
   const windowMinutes = params.windowMinutes ?? DUPLICATE_PAYMENT_WINDOW_MINUTES;
   const since = new Date(Date.now() - windowMinutes * 60_000).toISOString();
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("invoice_payments")
     .select("id, amount, payment_method, recorded_by, created_at")
     .eq("invoice_id", params.invoiceId)
@@ -57,6 +71,12 @@ export async function findRecentDuplicateExternalPayment(
     .gte("created_at", since)
     .order("created_at", { ascending: false })
     .limit(1);
+
+  if (params.method) {
+    query = query.eq("payment_method", params.method);
+  }
+
+  const { data, error } = await query;
 
   if (error || !data || data.length === 0) return null;
   const row = data[0];
@@ -117,6 +137,7 @@ export async function recordExternalInvoicePayment(
     const duplicate = await findRecentDuplicateExternalPayment(supabase, {
       invoiceId,
       amountAed: amount,
+      method,
     });
     if (duplicate) {
       return { success: false, ownerId: invoice.owner_id, duplicate };
@@ -135,6 +156,31 @@ export async function recordExternalInvoicePayment(
   const partial = newAmountPaid < grandTotal;
   const newStatus = deriveInvoiceStatusAfterRecalc(invoice.status, newAmountPaid, grandTotal);
 
+  // Write invoice_payments first (DB short-window reject + advisory lock). If a
+  // concurrent double-click loses the race, we fail before the legacy audit row.
+  const dual = await recordPayment({
+    invoiceId: invoice.id,
+    amount: roundAed(amount),
+    method,
+    recordedBy: performedBy.trim() || "system",
+    notes: note?.trim() || undefined,
+    skipWalletDeduction: true,
+    confirmDuplicate: params.confirmDuplicate,
+    client: supabase,
+  });
+  if (!dual.success) {
+    const err = dual.error || "Could not record payment.";
+    if (isDuplicatePaymentRejectedError(err)) {
+      return {
+        success: false,
+        ownerId: invoice.owner_id,
+        error:
+          "A matching payment was just recorded on this invoice. Refresh to confirm before trying again.",
+      };
+    }
+    return { success: false, ownerId: invoice.owner_id, error: err };
+  }
+
   const { error: txErr } = await supabase.from("wallet_transactions").insert({
     owner_id: invoice.owner_id,
     invoice_id: invoice.id,
@@ -145,13 +191,18 @@ export async function recordExternalInvoicePayment(
     performed_by: performedBy.trim(),
     notes: note?.trim() || (partial ? `Partial invoice payment by ${method}` : `Invoice paid by ${method}`),
   });
-  if (txErr) return { success: false, error: txErr.message };
+  if (txErr) {
+    return {
+      success: false,
+      ownerId: invoice.owner_id,
+      error: `Payment recorded but audit log failed: ${txErr.message}`,
+    };
+  }
 
   // amount_paid / status / paid_at are owned by the
   // trg_update_invoice_status_on_payment trigger (fires on the invoice_payments
-  // insert in recordPayment below). We still set status/paid_at here as a
-  // best-effort fallback for the case where the payment row insert fails; the
-  // trigger overwrites these from SUM(invoice_payments) on success.
+  // insert above). We still set status/paid_at/payment_method here as a
+  // best-effort sync of payment_method on the invoice header.
   const { error: payErr } = await supabase
     .from("invoices")
     .update({
@@ -165,41 +216,9 @@ export async function recordExternalInvoicePayment(
   if (payErr) {
     return {
       success: false,
+      ownerId: invoice.owner_id,
       error: `Payment recorded but invoice update failed: ${payErr.message}`,
     };
-  }
-
-  // Record the payment in the unified invoice_payments table via the shared
-  // service. Card/cash do not move the wallet, so skipWalletDeduction keeps
-  // recordPayment from touching wallet_transactions / owner.wallet_balance — the
-  // legacy +amount wallet_transactions log above is the audit record for the
-  // external payment. The trigger then sets amount_paid / status from the row.
-  // Best-effort: the wallet_transactions log already recorded the payment.
-  try {
-    const dual = await recordPayment({
-      invoiceId: invoice.id,
-      amount: roundAed(amount),
-      method,
-      recordedBy: performedBy.trim() || "system",
-      notes: note?.trim() || undefined,
-      skipWalletDeduction: true,
-      client: supabase,
-    });
-    if (!dual.success) {
-      console.error("[invoice_payments dual-write failed]", {
-        invoiceId: invoice.id,
-        amount,
-        err: dual.error,
-      });
-      // Non-fatal — legacy path already recorded payment
-    }
-  } catch (err) {
-    console.error("[invoice_payments dual-write failed]", {
-      invoiceId: invoice.id,
-      amount,
-      err,
-    });
-    // Non-fatal — legacy path already recorded payment
   }
 
   return {

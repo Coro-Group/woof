@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { StaffNameSelect } from "@/components/staff/StaffNameSelect";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
+import { loadInvoiceVoidPreview, voidInvoice, voidInvoicePreviewText, voidInvoiceRefusal } from "@/lib/voidInvoice";
 import type { BookingWithDetails } from "@/hooks/useBookings";
 import { useUpdateBooking } from "@/hooks/useBookings";
 
@@ -24,14 +26,34 @@ type Props = {
   onCancelled: () => void;
 };
 
+async function loadBookingInvoicePreview(bookingId: string) {
+  const { data, error } = await withoutSupersededInvoices(
+    supabase
+      .from("invoices")
+      .select("id")
+      .eq("booking_id", bookingId)
+      .order("created_at", { ascending: false })
+      .limit(1),
+  );
+  if (error) throw error;
+  const invoiceId = data?.[0]?.id;
+  if (!invoiceId) return null;
+  return loadInvoiceVoidPreview(invoiceId);
+}
+
 export function CancelBookingDialog({ open, onOpenChange, booking, onCancelled }: Props) {
   const updateBooking = useUpdateBooking();
   const [reason, setReason] = useState("");
   const [staffName, setStaffName] = useState("");
-  const [voidInvoice, setVoidInvoice] = useState(false);
+  const [voidInvoiceChecked, setVoidInvoiceChecked] = useState(false);
   const [pending, setPending] = useState(false);
 
   const isCheckedIn = booking.status === "checked_in";
+  const preview = useQuery({
+    queryKey: ["booking-void-preview", booking.id],
+    enabled: open && voidInvoiceChecked,
+    queryFn: () => loadBookingInvoicePreview(booking.id),
+  });
 
   const handleConfirm = async () => {
     if (!reason.trim()) {
@@ -42,9 +64,26 @@ export function CancelBookingDialog({ open, onOpenChange, booking, onCancelled }
       toast.error("Staff name is required.");
       return;
     }
+    if (voidInvoiceChecked && preview.data && !preview.data.canVoid) {
+      toast.error(voidInvoiceRefusal(preview.data.status) ?? "This invoice cannot be voided.");
+      return;
+    }
 
     setPending(true);
     try {
+      if (voidInvoiceChecked) {
+        const invoice = preview.data ?? (await loadBookingInvoicePreview(booking.id));
+        if (invoice?.canVoid) {
+          await voidInvoice({
+            invoiceId: invoice.id,
+            reason: reason.trim(),
+            staff: staffName.trim(),
+          });
+        } else if (invoice) {
+          throw new Error(voidInvoiceRefusal(invoice.status) ?? "This invoice cannot be voided.");
+        }
+      }
+
       const patch: {
         status: "cancelled";
         actual_check_out_at?: string;
@@ -61,46 +100,23 @@ export function CancelBookingDialog({ open, onOpenChange, booking, onCancelled }
 
       await updateBooking.mutateAsync({ id: booking.id, ...patch });
 
-      if (voidInvoice) {
-        const { data: invoice } = await withoutSupersededInvoices(
-          supabase
-            .from("invoices")
-            .select("id, status, amount_paid")
-            .eq("booking_id", booking.id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle(),
-        );
-
-        if (invoice) {
-          if ((invoice.amount_paid ?? 0) > 0) {
-            toast.warning(
-              "Booking cancelled. Linked invoice has payments — void/refund it from Billing.",
-            );
-          } else {
-            await supabase
-              .from("invoices")
-              .update({
-                status: "voided",
-                voided_at: new Date().toISOString(),
-                voided_reason: `Booking cancelled by ${staffName.trim()}: ${reason.trim()}`,
-              })
-              .eq("id", invoice.id);
-          }
-        }
-      }
-
-      toast.success("Booking cancelled.");
+      toast.success(
+        voidInvoiceChecked && preview.data?.canVoid
+          ? "Booking cancelled and invoice voided."
+          : "Booking cancelled.",
+      );
       onCancelled();
       onOpenChange(false);
       setReason("");
-      setVoidInvoice(false);
+      setVoidInvoiceChecked(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not cancel booking.");
     } finally {
       setPending(false);
     }
   };
+
+  const refusal = preview.data ? voidInvoiceRefusal(preview.data.status) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -128,19 +144,40 @@ export function CancelBookingDialog({ open, onOpenChange, booking, onCancelled }
           <div className="flex items-start gap-2">
             <Checkbox
               id="void-invoice"
-              checked={voidInvoice}
-              onCheckedChange={(v) => setVoidInvoice(v === true)}
+              checked={voidInvoiceChecked}
+              onCheckedChange={(v) => setVoidInvoiceChecked(v === true)}
             />
             <Label htmlFor="void-invoice" className="font-normal leading-snug">
-              Also void linked draft/unpaid invoice (skip if invoice has payments)
+              Also void the linked invoice
             </Label>
           </div>
+          {voidInvoiceChecked ? (
+            preview.isLoading ? (
+              <p className="text-muted-foreground">Loading linked invoice…</p>
+            ) : preview.data?.canVoid ? (
+              <p
+                className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-950"
+                data-testid="booking-void-preview"
+              >
+                {preview.data.invoiceNumber ? `${preview.data.invoiceNumber}. ` : ""}
+                {voidInvoicePreviewText(preview.data.paid, preview.data.unpaid)}
+              </p>
+            ) : refusal ? (
+              <p className="text-destructive">{refusal} Uncheck the box to cancel the booking only.</p>
+            ) : (
+              <p className="text-muted-foreground">No linked invoice to void.</p>
+            )
+          ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Keep booking
           </Button>
-          <Button variant="destructive" onClick={handleConfirm} disabled={pending}>
+          <Button
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={pending || (voidInvoiceChecked && preview.isLoading)}
+          >
             {pending ? "Cancelling…" : "Cancel booking"}
           </Button>
         </DialogFooter>

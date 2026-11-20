@@ -1,9 +1,11 @@
 import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { AlertTriangle, Download, Loader2, Package, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { exportDaycarePackagesToExcel } from "@/lib/daycarePackagesExport";
+import { invoiceToVoidForPackageRemoval } from "@/lib/daycarePackageRemoval";
 import { daycarePackagePetDisplayTitle } from "@/lib/daycareSharedPool";
 import { serviceGrantLabel } from "@/lib/packageCatalog";
 import { ownerDisplayName } from "@/lib/bookingUtils";
@@ -13,6 +15,7 @@ import {
   type PackageWithDetails,
 } from "@/hooks/useDaycare";
 import { OwnerSearchPopover } from "@/components/billing/OwnerSearchPopover";
+import { VoidInvoiceDialog } from "@/components/billing/VoidInvoiceDialog";
 import { PackageUsageDialog } from "@/components/daycare/PackageUsageDialog";
 import { PurchasePackageDialog } from "@/components/packages/PurchasePackageDialog";
 import { useOwner } from "@/hooks/useOwners";
@@ -35,16 +38,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 type PkgFilter = "all" | "low" | "exhausted";
 type TierFilter = "all" | "standard" | "silver" | "gold";
@@ -96,6 +89,11 @@ function PackageCard({ pkg }: { pkg: PackageWithDetails }) {
   const revokePackage = useDeleteDaycarePackage();
   const [detailOpen, setDetailOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const removalInvoice = useQuery({
+    queryKey: ["package-removal-invoice", pkg.id],
+    enabled: deleteOpen,
+    queryFn: () => invoiceToVoidForPackageRemoval(pkg.id),
+  });
   /** Prevents the card click handler from re-opening after dialog close (mouseup lands on card). */
   const ignoreCardOpenRef = useRef(false);
   const remaining = pkg.total_days - pkg.days_used;
@@ -261,40 +259,28 @@ function PackageCard({ pkg }: { pkg: PackageWithDetails }) {
       onOpenInPlanner={openInPlanner}
     />
 
-    <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Remove this package?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Removes unused credit for {pkg.pets?.name ?? "this pet"}
-            {pkg.package_name ? ` (${pkg.package_name})` : ""}. Only allowed when no days have been used
-            and no planner sessions are linked. Any unpaid invoice for this purchase will be voided.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={revokePackage.isPending}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            disabled={revokePackage.isPending}
-            onClick={(e) => {
-              e.preventDefault();
-              revokePackage.mutate(
-                { creditId: pkg.id, reason: "Removed from daycare packages" },
-                {
-                  onSuccess: () => {
-                    toast.success("Package removed");
-                    setDeleteOpen(false);
-                  },
-                  onError: (err) => toast.error(err.message),
-                },
-              );
-            }}
-          >
-            {revokePackage.isPending ? "Removing…" : "Remove package"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <VoidInvoiceDialog
+      open={deleteOpen}
+      invoiceId={removalInvoice.data ?? null}
+      pending={removalInvoice.isLoading}
+      loadError={
+        removalInvoice.isError
+          ? removalInvoice.error instanceof Error
+            ? removalInvoice.error.message
+            : "Could not check the purchase invoice."
+          : null
+      }
+      title="Remove this package?"
+      description={`Removes unused credit for ${pkg.pets?.name ?? "this pet"}${pkg.package_name ? ` (${pkg.package_name})` : ""}. Only allowed when no days have been used and no planner sessions are linked.`}
+      confirmLabel={removalInvoice.data ? "Void invoice" : "Remove package"}
+      onOpenChange={setDeleteOpen}
+      onConfirm={async ({ reason, staff }) => {
+        const result = await revokePackage.mutateAsync({ creditId: pkg.id, reason, staff });
+        toast.success(
+          result.invoice_voided ? "Package removed and invoice voided." : "Package removed.",
+        );
+      }}
+    />
     </>
   );
 }

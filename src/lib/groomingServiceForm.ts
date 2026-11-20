@@ -5,6 +5,7 @@ export type GroomingServiceCheckbox =
   | "full_groom"
   | "deshedding"
   | "tidy"
+  | "splash"
   | "bath_only"
   | "full_bath_full"
   | "fur_brushing"
@@ -30,6 +31,7 @@ export const GROOMING_SERVICE_CHECKBOX_OPTIONS: Array<{
   { value: "full_groom", label: "Full groom", mapsTo: "full_groom" },
   { value: "deshedding", label: "Deshedding", mapsTo: "deshedding" },
   { value: "tidy", label: "Tidy", mapsTo: "tidy" },
+  { value: "splash", label: "Splash", mapsTo: "splash" },
   { value: "bath_only", label: "Bath only", mapsTo: "full_bath" },
   { value: "full_bath_full", label: "Full bath", mapsTo: "full_bath" },
   { value: "fur_brushing", label: "Fur brushing", mapsTo: "brushing" },
@@ -38,7 +40,7 @@ export const GROOMING_SERVICE_CHECKBOX_OPTIONS: Array<{
   { value: "gland_expression", label: "Anal Gland Expression", mapsTo: "gland_expression" },
   { value: "blow_dry", label: "Blow dry", mapsTo: "full_bath" },
   { value: "ear_cleaning", label: "Ear cleaning", mapsTo: "brushing" },
-  { value: "pawdicure", label: "Pawdicure", mapsTo: "pawdicure" },
+  { value: "pawdicure", label: "Pawdicure / paw brushing", mapsTo: "pawdicure" },
   { value: "paw_wash", label: "Paw wash", mapsTo: "pawdicure" },
   { value: "malaseb_bath", label: "Malaseb bath", mapsTo: "full_bath" },
   { value: "matting_fee", label: "Matting fee", mapsTo: "brushing" },

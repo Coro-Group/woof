@@ -3616,6 +3616,7 @@ export type Database = {
       }
       transport_request: {
         Row: {
+          accepted_offer_id: string | null
           applied_regular_ids: string[] | null
           branch_id: string
           brand: string
@@ -3637,9 +3638,15 @@ export type Database = {
           location_text: string | null
           needs_review: boolean
           notes: string | null
+          offered_at: string | null
+          offered_by: string | null
           owner_id: string
           paused_from: string | null
           paused_until: string | null
+          promised_eta_min: number | null
+          promised_slot_id: string | null
+          promised_window_end_min: number | null
+          promised_window_start_min: number | null
           purpose: string
           rejection_reason: string | null
           requested_slot_id: string | null
@@ -3657,6 +3664,7 @@ export type Database = {
           window_start_min: number | null
         }
         Insert: {
+          accepted_offer_id?: string | null
           applied_regular_ids?: string[] | null
           branch_id: string
           brand?: string
@@ -3678,9 +3686,15 @@ export type Database = {
           location_text?: string | null
           needs_review?: boolean
           notes?: string | null
+          offered_at?: string | null
+          offered_by?: string | null
           owner_id: string
           paused_from?: string | null
           paused_until?: string | null
+          promised_eta_min?: number | null
+          promised_slot_id?: string | null
+          promised_window_end_min?: number | null
+          promised_window_start_min?: number | null
           purpose?: string
           rejection_reason?: string | null
           requested_slot_id?: string | null
@@ -3698,6 +3712,7 @@ export type Database = {
           window_start_min?: number | null
         }
         Update: {
+          accepted_offer_id?: string | null
           applied_regular_ids?: string[] | null
           branch_id?: string
           brand?: string
@@ -3719,9 +3734,15 @@ export type Database = {
           location_text?: string | null
           needs_review?: boolean
           notes?: string | null
+          offered_at?: string | null
+          offered_by?: string | null
           owner_id?: string
           paused_from?: string | null
           paused_until?: string | null
+          promised_eta_min?: number | null
+          promised_slot_id?: string | null
+          promised_window_end_min?: number | null
+          promised_window_start_min?: number | null
           purpose?: string
           rejection_reason?: string | null
           requested_slot_id?: string | null
@@ -3800,6 +3821,83 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "transport_request_event_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "transport_request"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_request_offer: {
+        Row: {
+          added_km: number | null
+          added_minutes: number | null
+          basis: string | null
+          chosen_by_staff: boolean
+          created_at: string
+          created_by: string | null
+          declined_by_client: boolean
+          displaces: number
+          eta_min: number | null
+          id: string
+          outcome: string | null
+          outside_windows: boolean
+          promised_slot_label: string | null
+          rank: number
+          reason: string | null
+          recommended: boolean
+          request_id: string
+          shift_hours: number
+          slot_label: string | null
+          slot_start_min: number | null
+        }
+        Insert: {
+          added_km?: number | null
+          added_minutes?: number | null
+          basis?: string | null
+          chosen_by_staff?: boolean
+          created_at?: string
+          created_by?: string | null
+          declined_by_client?: boolean
+          displaces?: number
+          eta_min?: number | null
+          id?: string
+          outcome?: string | null
+          outside_windows?: boolean
+          promised_slot_label?: string | null
+          rank: number
+          reason?: string | null
+          recommended?: boolean
+          request_id: string
+          shift_hours?: number
+          slot_label?: string | null
+          slot_start_min?: number | null
+        }
+        Update: {
+          added_km?: number | null
+          added_minutes?: number | null
+          basis?: string | null
+          chosen_by_staff?: boolean
+          created_at?: string
+          created_by?: string | null
+          declined_by_client?: boolean
+          displaces?: number
+          eta_min?: number | null
+          id?: string
+          outcome?: string | null
+          outside_windows?: boolean
+          promised_slot_label?: string | null
+          rank?: number
+          reason?: string | null
+          recommended?: boolean
+          request_id?: string
+          shift_hours?: number
+          slot_label?: string | null
+          slot_start_min?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_request_offer_request_id_fkey"
             columns: ["request_id"]
             isOneToOne: false
             referencedRelation: "transport_request"

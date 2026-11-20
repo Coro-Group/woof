@@ -1,22 +1,45 @@
 import { Loader2, Sparkles } from "lucide-react";
-import { useTransportHubQuote, useTransportHubStatus, type HubOffer } from "@/hooks/useTransport";
+import { useTransportHubQuote, useTransportHubStatus, type HubOffer, type HubQuote } from "@/hooks/useTransport";
+import { OfferList, OutcomeBadge, PromiseBox, VOLTLINES_QUOTE_NOTE, quoteToPanelOffers } from "@/components/transport/OfferPanel";
 import { Button } from "@/components/ui/button";
 
-/** Offer times from the vans on Admin Essentials. Hidden while that link is off. */
+/** The offer a person accepted on the form, and the quote it came from (stored on save). */
+export type AcceptedOffer = { startMin: number; slotLabel: string; eta: string | null; quote: HubQuote; index: number };
+
+/** AE's line under an accepted offer: "Promised: 08-09AM — collected around 08:20". */
+export function promiseLine(o: Pick<AcceptedOffer, "slotLabel" | "eta">): string {
+  return `Promised: ${o.slotLabel}${o.eta ? ` — collected around ${o.eta}` : ""}`;
+}
+
+/** AE's words for how an offer sits against the hour asked for (OfferList). */
+export function offerShiftText(o: Pick<HubOffer, "shiftHours" | "outsideWindows">): string {
+  if (o.outsideWindows) return "outside the windows we publish";
+  if (!o.shiftHours) return "the slot they asked for";
+  return `${Math.abs(o.shiftHours)} hour ${o.shiftHours < 0 ? "earlier" : "later"}`;
+}
+
+/**
+ * Offer on the new-request form — AE's Offer, before the request exists: the hub quotes
+ * the hour asked for and the hours either side, shown as AE's OfferList. Accept fills
+ * the time; saving stores the options and records the promise, exactly as Accept does
+ * on an Inbox request. Hidden while the hub link is switched off.
+ */
 export function HubOfferTimes({
   petId,
   date,
   direction,
   askedStartMin,
   location,
-  onPick,
+  accepted,
+  onAccept,
 }: {
   petId: string | null;
   date: string | null;
   direction: "pickup" | "dropoff";
   askedStartMin: number | null;
   location?: { label: string; lat: number; lng: number } | null;
-  onPick: (startMin: number) => void;
+  accepted: AcceptedOffer | null;
+  onAccept: (offer: AcceptedOffer | null) => void;
 }) {
   const status = useTransportHubStatus();
   const quote = useTransportHubQuote();
@@ -26,53 +49,57 @@ export function HubOfferTimes({
   const missing = !petId ? "one dog" : !date ? "one date" : askedStartMin == null ? "the hour they asked for" : null;
   const ask = () => {
     if (!petId || !date || askedStartMin == null) return;
+    onAccept(null);
     quote.mutate({ petId, date, direction, startMin: askedStartMin, ...(location ? { location } : {}) });
   };
 
+  if (accepted) {
+    return (
+      <div className="space-y-1" data-testid={`transport-hub-promise-${direction}`}>
+        <PromiseBox slotLabel={accepted.slotLabel} eta={accepted.eta} />
+        <p className="text-xs text-muted-foreground">
+          Saving records the promise against your name and approves this trip.{" "}
+          <button type="button" className="underline" onClick={() => onAccept(null)}>
+            Choose again
+          </button>
+        </p>
+      </div>
+    );
+  }
+
+  const panel = quote.data ? quoteToPanelOffers(quote.data.offers) : [];
   return (
     <div className="space-y-2 rounded-md border border-dashed p-2" data-testid={`transport-hub-offers-${direction}`}>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" onClick={ask} disabled={!!missing || quote.isPending}>
           {quote.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
-          Get offer times
+          {quote.data ? "Offer again" : "Offer"}
         </Button>
-        <span className="text-xs text-muted-foreground">
-          {missing ? `Choose ${missing} first.` : "From the vans on Admin Essentials (takes a few seconds)."}
-        </span>
+        {quote.data && <OutcomeBadge outcome={quote.data.outcome} />}
+        {missing && <span className="text-xs text-muted-foreground">Choose {missing} first.</span>}
       </div>
       {quote.error && <p className="text-xs text-destructive">{(quote.error as Error).message}</p>}
       {quote.data && (
-        <div className="space-y-1">
-          {quote.data.reason && <p className="text-xs text-muted-foreground">{quote.data.reason}</p>}
-          {quote.data.offers.length === 0 ? (
-            <p className="text-xs">No time offered — the transport team will need to look at this one.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {quote.data.offers.map((o) => (
-                <OfferChip key={`${o.slotLabel}-${o.eta}`} offer={o} onPick={onPick} />
-              ))}
-            </div>
+        <div className="space-y-2">
+          {quote.data.reason && (
+            <p className="text-sm rounded-md border-l-2 border-amber-500 bg-muted/50 px-3 py-2">{quote.data.reason}</p>
           )}
-          {quote.data.estimated && <p className="text-xs text-muted-foreground">Estimated: the route checker is busy, times are approximate.</p>}
+          <OfferList
+            offers={panel}
+            onAccept={(offerId) => {
+              const index = Number(offerId);
+              const o = quote.data?.offers[index];
+              const p = panel[index];
+              if (!o || !p || o.startMin == null || !quote.data) return;
+              onAccept({ startMin: o.startMin, slotLabel: p.slotLabel, eta: o.eta, quote: quote.data, index });
+            }}
+            emptyText="No existing run can take them. The transport team will look at this one."
+          />
+          <p className="text-xs text-muted-foreground">
+            {VOLTLINES_QUOTE_NOTE} Accepting records the promise against your name.
+          </p>
         </div>
       )}
     </div>
-  );
-}
-
-function OfferChip({ offer, onPick }: { offer: HubOffer; onPick: (startMin: number) => void }) {
-  const label = offer.promisedSlotLabel ?? offer.slotLabel ?? "?";
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={offer.recommended ? "default" : "outline"}
-      disabled={offer.startMin == null}
-      onClick={() => offer.startMin != null && onPick(offer.startMin)}
-    >
-      {label}
-      {offer.eta ? ` · ~${offer.eta}` : ""}
-      {offer.recommended ? " ★" : ""}
-    </Button>
   );
 }

@@ -130,10 +130,10 @@ export function useTransportRequestRows(
     refetchInterval: REFETCH_MS,
     queryFn: async () => {
       let q = supabase.from("transport_request").select(REQUEST_SELECT).order("created_at", { ascending: false }).limit(1000);
-      if (scope === "open") q = q.eq("status", "received");
+      if (scope === "open") q = q.in("status", ["received", "offered"]);
       else if (scope === "missed") {
         // Dated additions in the range, answered or not; rowMissed() decides which were late.
-        q = q.eq("kind", "one_off").in("status", ["received", "approved", "rejected"]);
+        q = q.eq("kind", "one_off").in("status", ["received", "offered", "approved", "rejected"]);
         if (range) q = q.gte("service_date", range.from).lte("service_date", range.to ?? range.from);
       } else {
         q = q.eq("status", "approved");
@@ -179,8 +179,21 @@ export type SameDayConflict = { date: string; petId: string; petName: string; di
  * AE's same-day notice: which of these pets already have a live run on these dates and
  * directions, so reception doesn't book the same trip twice.
  */
-export function useSameDayConflicts(ownerId: string | null, petIds: string[], dates: string[], directions: string[]) {
-  const key = [ownerId, [...petIds].sort().join(","), [...dates].sort().join(","), [...directions].sort().join(",")];
+export function useSameDayConflicts(
+  ownerId: string | null,
+  petIds: string[],
+  dates: string[],
+  directions: string[],
+  /** The request being approved: its own trip is not a clash with itself. */
+  excludeRequestIds: string[] = [],
+) {
+  const key = [
+    ownerId,
+    [...petIds].sort().join(","),
+    [...dates].sort().join(","),
+    [...directions].sort().join(","),
+    [...excludeRequestIds].sort().join(","),
+  ];
   const { data = [] } = useQuery({
     queryKey: ["transport", "same-day", ...key],
     enabled: !!ownerId && petIds.length > 0 && dates.length > 0 && directions.length > 0,
@@ -193,7 +206,8 @@ export function useSameDayConflicts(ownerId: string | null, petIds: string[], da
         const { data: rows, error } = await supabase.rpc("transport_day_demand", { p_date: date });
         if (error) throw error;
         for (const s of liveStops(mergeDemand((rows ?? []) as DemandRow[]))) {
-          if (s.ownerId === ownerId && petIds.includes(s.petId) && directions.includes(s.direction)) {
+          const onlyItself = s.sources.every((src) => src === "request") && excludeRequestIds.includes(s.sourceId);
+          if (!onlyItself && s.ownerId === ownerId && petIds.includes(s.petId) && directions.includes(s.direction)) {
             out.push({
               date,
               petId: s.petId,
@@ -397,7 +411,7 @@ export function useOwnerTransport(ownerId: string, fromDate: string) {
           .from("transport_request")
           .select(REQUEST_SELECT)
           .eq("owner_id", ownerId)
-          .in("status", ["received", "approved"])
+          .in("status", ["received", "offered", "approved"])
           .or(`service_date.gte.${fromDate},service_date.is.null`)
           .order("created_at", { ascending: false })
           .limit(100),
@@ -635,6 +649,11 @@ export type HubOffer = {
   promisedSlotLabel: string | null;
   eta: string | null;
   shiftHours: number;
+  /** "costs {km} km / {min} min" on AE's offer list. */
+  addedKm?: number | null;
+  addedMinutes?: number | null;
+  /** Off the published hour grid: "outside the windows we publish". */
+  outsideWindows?: boolean;
   recommended: boolean;
   fitsClient: boolean | null;
   displaces: number;
@@ -696,3 +715,249 @@ export function useTransportHubSync() {
   });
 }
 
+
+// ── Offers and promises on a request — AE's Offer / Accept (transport_request_offer) ──
+
+export type TransportRequestOffer = Database["public"]["Tables"]["transport_request_offer"]["Row"];
+
+/** "HH:MM" from minutes after midnight (AE's hhmm); "—" when unknown. */
+export function hhmm(min: number | null | undefined): string {
+  if (min == null || !Number.isFinite(min)) return "—";
+  const m = Math.max(0, Math.round(min));
+  return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** "08:20" → 500. */
+export function minutesOf(clock: string | null | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(clock ?? ""));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/** The stored offers of these request rows, by row, in rank order. */
+export function useRequestOffers(requestIds: string[]) {
+  const ids = [...requestIds].sort();
+  return useQuery({
+    queryKey: ["transport", "request-offers", ...ids],
+    enabled: ids.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("transport_request_offer")
+        .select("*")
+        .in("request_id", ids)
+        .order("rank");
+      if (error) throw error;
+      const by = new Map<string, TransportRequestOffer[]>();
+      for (const o of data ?? []) by.set(o.request_id, [...(by.get(o.request_id) ?? []), o]);
+      return by;
+    },
+  });
+}
+
+/** One hub quote stored as offer rows (AE persistOffersOnRequest). */
+export function offerRowsOf(requestId: string, quote: HubQuote, actor: string | null) {
+  return quote.offers.map((o, i) => ({
+    request_id: requestId,
+    rank: i + 1,
+    outcome: quote.outcome,
+    reason: quote.reason,
+    slot_start_min: o.startMin,
+    slot_label: o.slotLabel,
+    promised_slot_label: o.promisedSlotLabel,
+    outside_windows: !!o.outsideWindows,
+    shift_hours: o.shiftHours ?? 0,
+    eta_min: minutesOf(o.eta),
+    added_km: o.addedKm ?? null,
+    added_minutes: o.addedMinutes ?? null,
+    displaces: o.displaces ?? 0,
+    recommended: !!o.recommended,
+    basis: o.basis ?? null,
+    created_by: actor,
+  }));
+}
+
+export type OfferLeg = {
+  requestId: string;
+  petId: string;
+  date: string;
+  direction: "pickup" | "dropoff";
+  startMin: number;
+  location?: { label: string; lat: number; lng: number };
+};
+
+/**
+ * AE's Offer / Offer again: quote every leg on the hub, store its options, and mark the
+ * request offered. A second Offer replaces the options not yet decided.
+ */
+export function useOfferRequest() {
+  const invalidate = useInvalidateTransport();
+  return useMutation({
+    mutationFn: async ({ legs, actor }: { legs: OfferLeg[]; actor: string }) => {
+      const results: Array<{ requestId: string; quote: HubQuote | null; error: string | null }> = [];
+      for (const leg of legs) {
+        try {
+          const quote = await hubApi<HubQuote>({
+            method: "POST",
+            body: JSON.stringify({
+              op: "quote",
+              petId: leg.petId,
+              date: leg.date,
+              direction: leg.direction,
+              startMin: leg.startMin,
+              ...(leg.location ? { location: leg.location } : {}),
+            }),
+          });
+          const { error: delErr } = await supabase
+            .from("transport_request_offer")
+            .delete()
+            .eq("request_id", leg.requestId)
+            .eq("chosen_by_staff", false);
+          if (delErr) throw delErr;
+          const rows = offerRowsOf(leg.requestId, quote, actor);
+          if (rows.length) {
+            const { error: insErr } = await supabase.from("transport_request_offer").insert(rows);
+            if (insErr) throw insErr;
+          }
+          const { error: upErr } = await supabase
+            .from("transport_request")
+            .update({ status: "offered", offered_by: actor, offered_at: new Date().toISOString(), updated_by: actor })
+            .eq("id", leg.requestId)
+            .in("status", ["received", "offered"]);
+          if (upErr) throw upErr;
+          results.push({ requestId: leg.requestId, quote, error: null });
+        } catch (err) {
+          results.push({ requestId: leg.requestId, quote: null, error: (err as Error).message });
+        }
+      }
+      return results;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+/** The promise AE records on accept: the hour, its window, and when the van comes. */
+export function promiseFields(
+  offer: Pick<TransportRequestOffer, "id" | "slot_start_min" | "eta_min">,
+  slots: TransportSlot[],
+  direction: string,
+) {
+  const slot = slots.find((s) => s.direction === direction && s.start_min === offer.slot_start_min) ?? null;
+  const eta = offer.eta_min;
+  return {
+    accepted_offer_id: offer.id,
+    promised_slot_id: slot?.id ?? null,
+    requested_slot_id: slot?.id ?? null,
+    promised_window_start_min: slot ? slot.start_min : eta != null ? Math.max(0, eta - 30) : null,
+    promised_window_end_min: slot ? slot.end_min : eta != null ? Math.min(1439, eta + 30) : null,
+    promised_eta_min: eta,
+  };
+}
+
+/**
+ * AE's Accept (api/transport-accept): the promise is recorded against the person and the
+ * trip is approved; options the client turned down are marked declined.
+ */
+export function useAcceptRequestOffer() {
+  const invalidate = useInvalidateTransport();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      requestId,
+      direction,
+      offer,
+      declinedOfferIds,
+      slots,
+      actor,
+    }: {
+      requestId: string;
+      direction: string;
+      offer: TransportRequestOffer;
+      declinedOfferIds: string[];
+      slots: TransportSlot[];
+      actor: string;
+    }) => {
+      const now = new Date().toISOString();
+      if (declinedOfferIds.length) {
+        const { error } = await supabase
+          .from("transport_request_offer")
+          .update({ declined_by_client: true })
+          .in("id", declinedOfferIds);
+        if (error) throw error;
+      }
+      const { error: chosenErr } = await supabase
+        .from("transport_request_offer")
+        .update({ chosen_by_staff: true })
+        .eq("id", offer.id);
+      if (chosenErr) throw chosenErr;
+      const { error } = await supabase
+        .from("transport_request")
+        .update({
+          ...promiseFields(offer, slots, direction),
+          status: "approved",
+          decided_by: actor,
+          decided_at: now,
+          updated_by: actor,
+        })
+        .eq("id", requestId);
+      if (error) throw error;
+      return { message: "Promise recorded. It is on the schedule and goes to the transport hub with the next sync." };
+    },
+    onSuccess: () => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["transport", "request-offers"] });
+    },
+  });
+}
+
+/**
+ * AE's Book by hand: no quote is possible (no Voltlines passenger, or no usable pin),
+ * so the trip is approved at the hour on the card and flagged for review.
+ */
+export function useBookByHand() {
+  const invalidate = useInvalidateTransport();
+  return useMutation({
+    mutationFn: async ({ ids, reason, actor }: { ids: string[]; reason: string; actor: string }) => {
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from("transport_request")
+        .update({
+          status: "approved",
+          decided_by: actor,
+          decided_at: now,
+          updated_by: actor,
+          needs_review: true,
+          review_reason: reason,
+        })
+        .in("id", ids)
+        .in("status", ["received", "offered"]);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * A promise accepted on the new-request form: store the quote's options on the saved
+ * rows and mark the chosen one, so the request reads as one offered and accepted in the
+ * Inbox (same rows, same promise).
+ */
+export async function storeFormOffers(
+  groupId: string,
+  accepted: Partial<Record<"pickup" | "dropoff", { quote: HubQuote; index: number }>>,
+  actor: string | null,
+) {
+  const { data: saved, error } = await supabase.from("transport_request").select("id, direction").eq("group_id", groupId);
+  if (error) throw error;
+  for (const row of saved ?? []) {
+    const choice = accepted[row.direction as "pickup" | "dropoff"];
+    if (!choice) continue;
+    const rows = offerRowsOf(row.id, choice.quote, actor).map((o, i) => ({ ...o, chosen_by_staff: i === choice.index }));
+    if (!rows.length) continue;
+    const { data: inserted, error: insErr } = await supabase.from("transport_request_offer").insert(rows).select("id, rank");
+    if (insErr) throw insErr;
+    const chosen = (inserted ?? []).find((o) => o.rank === choice.index + 1);
+    if (chosen) {
+      const { error: upErr } = await supabase.from("transport_request").update({ accepted_offer_id: chosen.id }).eq("id", row.id);
+      if (upErr) throw upErr;
+    }
+  }
+}

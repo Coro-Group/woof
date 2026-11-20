@@ -7,7 +7,12 @@
  */
 
 export type RequestKind = "one_off" | "new_recurring" | "cancel" | "pause" | "change";
-export type RequestStatus = "received" | "approved" | "rejected" | "cancelled";
+export type RequestStatus = "received" | "offered" | "approved" | "rejected" | "cancelled";
+
+/** Still to act on: recorded, or offered and waiting on the customer (AE's inbox). */
+export function isOpenStatus(status: string | null | undefined): boolean {
+  return status === "received" || status === "offered";
+}
 export type Tone = "good" | "warn" | "critical" | "info" | "neutral";
 
 export type RequestRowLike = {
@@ -75,11 +80,11 @@ export const TONE_TEXT: Record<Tone, string> = {
 };
 
 export function statusLabel(status: string): string {
-  return { received: "Received", approved: "Approved", rejected: "Rejected", cancelled: "Cancelled" }[status] ?? status;
+  return { received: "Received", offered: "Offered", approved: "Approved", rejected: "Rejected", cancelled: "Cancelled" }[status] ?? status;
 }
 
 export function statusTone(status: string): Tone {
-  return ({ received: "warn", approved: "good", rejected: "warn", cancelled: "neutral" } as Record<string, Tone>)[status] ?? "neutral";
+  return ({ received: "warn", offered: "info", approved: "good", rejected: "warn", cancelled: "neutral" } as Record<string, Tone>)[status] ?? "neutral";
 }
 
 /** AE's ask badge: addition vs cancellation vs pause. */
@@ -147,7 +152,11 @@ export function groupRequests<R extends RequestRowLike>(rows: R[]): RequestCard<
       kind: lead.kind as RequestKind,
       cadence: (lead.cadence as RequestCard["cadence"]) ?? null,
       // A card answered together has one status; a part-answered card shows the open part.
-      status: (list.some((r) => r.status === "received") ? "received" : lead.status) as RequestStatus,
+      status: (list.some((r) => r.status === "received")
+        ? "received"
+        : list.some((r) => r.status === "offered")
+          ? "offered"
+          : lead.status) as RequestStatus,
       branchId: lead.branch_id,
       petNames,
       ownerName: owner ? `${owner.first_name} ${owner.last_name ?? ""}`.trim() : "",
@@ -246,7 +255,7 @@ export function dubaiDay(iso: string): string {
  */
 export function rowMissed(row: RequestRowLike, today: string): boolean {
   if (row.kind !== "one_off" || !row.service_date) return false;
-  if (row.status === "received") return row.service_date < today;
+  if (isOpenStatus(row.status)) return row.service_date < today;
   if (row.status === "approved" || row.status === "rejected") {
     return !!row.decided_at && dubaiDay(row.decided_at) > row.service_date;
   }
@@ -263,7 +272,7 @@ export function daysLate(row: RequestRowLike): number {
 
 /** Kept for the Inbox: an unanswered addition whose every day has already gone. */
 export function cardMissed<R extends RequestRowLike>(card: RequestCard<R>, today: string): boolean {
-  return card.status === "received" && card.rows.every((r) => rowMissed(r, today));
+  return isOpenStatus(card.status) && card.rows.every((r) => rowMissed(r, today));
 }
 
 export const REJECT_REASONS = [

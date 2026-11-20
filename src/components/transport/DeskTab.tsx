@@ -21,7 +21,7 @@ export function stopIssues(stop: BoardStop): string[] {
   const reasons: string[] = [];
   if (!stopHasPin(stop)) reasons.push("No home pin");
   if (!stop.time) reasons.push("No time set");
-  if (stop.source === "request" && stop.status === "received") reasons.push("Request not approved");
+  if (stop.source === "request" && (stop.status === "received" || stop.status === "offered")) reasons.push("Request not approved");
   return reasons;
 }
 

@@ -141,7 +141,9 @@ export function buildHubSync({ from, to, regulars, days, pets }) {
         continue;
       }
       if (s.source === "request") {
-        if (s.struck) continue;
+        if (s.struck) continue; // cancelled, or a home trip a boarding stay pauses
+        // AE plans only what has been agreed: a request still received or offered waits.
+        if (s.status && s.status !== "approved") continue;
         if (s.purpose === "transfer") {
           note(`branch move ${date}`, s.pet_id, "cross-facility move — Woof has one site");
           continue;

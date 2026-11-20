@@ -247,7 +247,11 @@ function MissedView({ name, branch, onOpen }: { name: string; branch: BranchFilt
       if (!cardMatches(card, name) || !matchesBranch(card.branchId, branch)) continue;
       for (const d of card.dates) {
         const rows = card.rows.filter((r) => r.service_date === d);
-        const status = rows.some((r) => r.status === "received") ? "received" : (rows[0].status as Card_["status"]);
+        const status = rows.some((r) => r.status === "received")
+          ? "received"
+          : rows.some((r) => r.status === "offered")
+            ? "offered"
+            : (rows[0].status as Card_["status"]);
         m.set(d, [...(m.get(d) ?? []), { ...card, rows, lead: rows[0], dates: [d], status }]);
       }
     }
@@ -463,7 +467,7 @@ function RequestCardView({
       {review?.review_reason && <p className={`text-sm mt-1 ${TONE_TEXT.warn}`}>{review.review_reason}</p>}
       {missed && (
         <p className={`text-sm mt-1 ${TONE_TEXT.critical}`} data-testid="transport-request-missed-reason">
-          {card.status === "received"
+          {card.status === "received" || card.status === "offered"
             ? "Not answered yet — the date has passed"
             : `${statusLabel(card.status)} ${late} day${late === 1 ? "" : "s"} after the requested date${
                 card.lead.decided_by ? ` by ${card.lead.decided_by}` : ""

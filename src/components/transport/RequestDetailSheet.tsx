@@ -1,13 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
-import { AlertTriangle, Check, Loader2, StickyNote, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Sparkles, StickyNote, X } from "lucide-react";
 import { toast } from "sonner";
 import { useBranch } from "@/contexts/BranchContext";
 import { usePets } from "@/hooks/usePets";
 import {
+  hhmm,
+  useAcceptRequestOffer,
+
+  useBookByHand,
   useCurrentStaffName,
   useDecideTransportRequest,
+  useOfferRequest,
+  useRequestOffers,
+  useSameDayConflicts,
+  useTransportHubStatus,
+  type SameDayConflict,
+  type TransportRequestOffer,
+  type TransportSlot,
   useSetTransportRequestPets,
   useTransportRequestGroup,
   useTransportSlots,
@@ -23,6 +34,7 @@ import {
   cardSummary,
   dayDate,
   groupRequests,
+  isOpenStatus,
   kindLabel,
   kindTone,
   shortDate,
@@ -31,6 +43,8 @@ import {
 } from "@/lib/transportRequests";
 import { OwnerCombobox } from "@/components/daycare/DaycareOwnerCombobox";
 import { BranchBadge, PinBadge, RequestPetNames, dipFirst } from "@/components/transport/transportShared";
+
+import { OfferList, PromiseBox, VOLTLINES_QUOTE_NOTE, legLabel, storedToPanelOffers, useSameDayConfirm } from "@/components/transport/OfferPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,9 +57,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VaccineStatusBadge } from "@/components/VaccineStatusBadge";
+import { TONE } from "@/components/transport/status";
 
 const ACTION_LABEL: Record<string, string> = {
   recorded: "Recorded",
+  offered: "Offered",
   approved: "Approved",
   rejected: "Rejected",
   cancelled: "Withdrawn",
@@ -55,8 +71,10 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 /**
- * One card, opened from the Requests list: what they asked, fix anything missing,
- * then approve or reject.
+ * One card, opened from the Requests list (AE's RequestDetailSheet): what they asked,
+ * fix anything missing, then — as in AE — Offer (the transport hub quotes the hour
+ * asked and the hours either side), Accept the option the customer takes, or Book by
+ * hand when no quote is possible. Cancellations, pauses, moves and regulars approve.
  */
 export function RequestDetailSheet({ groupId, onClose }: { groupId: string | null; onClose: () => void }) {
   const { data, isLoading } = useTransportRequestGroup(groupId);
@@ -89,10 +107,12 @@ function DetailBody({
   const card = groupRequests(rows)[0];
   const lead = card.lead;
   const owner = lead.owners;
-  const open = card.status === "received";
+  const homeLat = owner?.pin_lat ?? null;
+  const homeLng = owner?.pin_lng ?? null;
+  const open = isOpenStatus(card.status);
   const addition = card.kind === "one_off" || card.kind === "new_recurring";
   const ids = rows.map((r) => r.id);
-  const openIds = rows.filter((r) => r.status === "received").map((r) => r.id);
+  const openIds = rows.filter((r) => isOpenStatus(r.status)).map((r) => r.id);
 
   const { branches, branchLocked } = useBranch();
   const { data: slots = [] } = useTransportSlots();
@@ -180,7 +200,97 @@ function DetailBody({
 
   const slotsFor = (direction: string) => slots.filter((s) => s.direction === direction);
   const today = dubaiToday();
-  const noPin = addition && owner && owner.pin_lat == null && rows.every((r) => r.location_lat == null);
+  const noPin = addition && owner && homeLat == null && rows.every((r) => r.location_lat == null);
+
+  /*
+   * AE's Offer / Accept / Book by hand, for dated additions while the hub link is on.
+   * Cancellations, pauses, moves, regulars and vet / branch-move legs still Approve.
+   */
+  const hub = useTransportHubStatus();
+  const hubOn = !!hub.data?.enabled && !!hub.data?.configured && hub.data?.hub?.enabled === true;
+  const offerable = hubOn && card.kind === "one_off" && (lead.purpose ?? "regular") === "regular";
+  const offersQuery = useRequestOffers(ids);
+  const offersByLeg = offersQuery.data ?? new Map<string, TransportRequestOffer[]>();
+  const offerRequest = useOfferRequest();
+  const bookByHand = useBookByHand();
+  const sameDay = useSameDayConfirm();
+  const openLegs = rows.filter((r) => isOpenStatus(r.status));
+  const petById = new Map(ownerPets.map((p) => [p.id, p]));
+  const notOnVoltlines = petIds.some((id) => !petById.get(id)?.voltlines_passenger_id);
+  const pinless = !!noPin;
+  const alreadyOffered = rows.some((r) => r.status === "offered");
+  const legsWithoutTime = openLegs.filter((r) => !r.requested_slot_id);
+  // Every option on every offered leg would push someone out: nothing here can accept it.
+  const nothingToAccept =
+    alreadyOffered && openLegs.every((r) => (offersByLeg.get(r.id) ?? []).every((o) => (o.displaces ?? 0) > 0));
+  const byHand = offerable && (notOnVoltlines || pinless || nothingToAccept);
+  const conflicts = useSameDayConflicts(
+    lead.owner_id,
+    petIds,
+    openLegs.map((r) => r.service_date).filter((d): d is string => !!d),
+    [...new Set(openLegs.map((r) => r.direction))],
+    ids,
+  );
+  const sortedLegs = [...rows].sort(
+    (a, b) =>
+      (a.service_date ?? String(a.weekday)).localeCompare(b.service_date ?? String(b.weekday)) || (a.direction === "pickup" ? -1 : 1),
+  );
+
+  const runOffer = () => {
+    const legs = openLegs
+      .filter((r) => r.service_date && r.requested_slot_id)
+      .map((r) => ({
+        requestId: r.id,
+        petId: r.transport_request_pet[0]?.pet_id ?? petIds[0],
+        date: r.service_date as string,
+        direction: r.direction as "pickup" | "dropoff",
+        startMin: slots.find((sl) => sl.id === r.requested_slot_id)?.start_min ?? 0,
+        ...(r.location_text && r.location_lat != null && r.location_lng != null
+          ? { location: { label: r.location_text, lat: r.location_lat, lng: r.location_lng } }
+          : {}),
+      }));
+    offerRequest.mutate(
+      { legs, actor },
+      {
+        onSuccess: (results) => {
+          const failed = results.find((x) => x.error);
+          if (failed) toast.error(failed.error);
+          else toast.success("Offers ready — accept the option the customer takes.");
+        },
+        onError: (e) => toast.error((e as Error).message),
+      },
+    );
+  };
+
+  const runBookByHand = () =>
+    sameDay.ask(conflictMessages(conflicts), () =>
+      bookByHand.mutate(
+        {
+          ids: openIds,
+          actor,
+          reason: notOnVoltlines
+            ? "no Voltlines passenger"
+            : pinless
+              ? "no usable Voltlines pin"
+              : "booked by hand — no offer could be accepted",
+        },
+        {
+          onSuccess: () => {
+            toast.success(
+              notOnVoltlines
+                ? "Booked. It is on the schedule, waiting on a Voltlines account."
+                : pinless
+                  ? "Booked. It is on the schedule, waiting on a usable Voltlines pin."
+                  : "Booked. It is on the schedule.",
+            );
+            onDone();
+          },
+          onError: (e) => toast.error((e as Error).message),
+        },
+      ),
+    );
+
+  const trail = requestTrail(card.kind, card.status, lead);
 
   return (
     <div className="space-y-5 pb-8">
@@ -347,7 +457,8 @@ function DetailBody({
 
       {owner && (
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          <PinBadge lat={owner.pin_lat} lng={owner.pin_lng} />
+          <PinBadge lat={homeLat} lng={homeLng} />
+
           {owner.phone && <span className="text-muted-foreground">{owner.phone}</span>}
           {owner.transport_notes?.trim() && (
             <span>
@@ -382,6 +493,7 @@ function DetailBody({
                 />
                 {p.name}
                 <VaccineStatusBadge petId={p.id} />
+
               </label>
             ))}
           </div>
@@ -424,15 +536,49 @@ function DetailBody({
       {open && (
         <section className="space-y-3">
           <Separator />
+          {sameDay.dialog}
           {dirty && <p className="text-xs text-amber-700 dark:text-amber-400">Save your changes before approving.</p>}
+          {offerable && legsWithoutTime.length > 0 && !dirty && (
+            <p className={`text-xs ${TONE.warn.text}`}>Set the time they asked for on each trip above, save, then Offer.</p>
+          )}
+          {offerable && (notOnVoltlines || pinless) && (
+            <p className={`text-xs ${TONE.warn.text}`}>
+              {notOnVoltlines
+                ? "A dog on this request is not on Voltlines, so Offer cannot price it. Book by hand with the time above, and match the dog on Voltlines."
+                : "This client has no usable pin, so Offer cannot price it. Book by hand with the time above, and add the home pin."}
+            </p>
+          )}
           {!rejecting ? (
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => act("approve")} disabled={dirty || decide.isPending} data-testid="transport-request-approve">
-                {decide.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-                Approve
-              </Button>
+              {!offerable && (
+                <Button onClick={() => act("approve")} disabled={dirty || decide.isPending} data-testid="transport-request-approve">
+                  {decide.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+                  Approve
+                </Button>
+              )}
+              {offerable && !(notOnVoltlines || pinless) && (
+                <Button
+                  onClick={runOffer}
+                  disabled={dirty || offerRequest.isPending || legsWithoutTime.length > 0}
+                  title={legsWithoutTime.length ? "Set the time they asked for first" : undefined}
+                  data-testid="transport-request-offer"
+                >
+                  {offerRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  {alreadyOffered ? "Offer again" : "Offer"}
+                </Button>
+              )}
+              {byHand && (
+                <Button
+                  variant="secondary"
+                  onClick={runBookByHand}
+                  disabled={dirty || bookByHand.isPending}
+                  data-testid="transport-request-book-by-hand"
+                >
+                  Book by hand
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setRejecting(true)} disabled={decide.isPending} data-testid="transport-request-reject">
-                <X className="mr-2 h-4 w-4" /> Reject
+                <X className="mr-2 h-4 w-4" /> Request rejected
               </Button>
               <Button
                 variant="ghost"
@@ -444,7 +590,7 @@ function DetailBody({
             </div>
           ) : (
             <div className="space-y-2 rounded-md border p-3">
-              <p className="text-sm font-medium">Request rejected — why?</p>
+              <p className="text-sm font-medium">Why is this rejected?</p>
               <div className="flex flex-wrap gap-2">
                 {[...REJECT_REASONS, "Other…"].map((r) => (
                   <Button key={r} size="sm" variant={reason === r ? "default" : "outline"} className="h-8 text-xs" onClick={() => setReason(r)}>
@@ -453,19 +599,20 @@ function DetailBody({
                 ))}
               </div>
               {reason === "Other…" && (
-                <Input placeholder="What happened" value={otherReason} onChange={(e) => setOtherReason(e.target.value)} />
+                <Input placeholder="Type the reason for the team…" value={otherReason} onChange={(e) => setOtherReason(e.target.value)} />
               )}
               <div className="flex gap-2">
                 <Button
                   size="sm"
+                  variant="destructive"
                   disabled={!reason || (reason === "Other…" && !otherReason.trim()) || decide.isPending}
                   onClick={() => act("reject", reason === "Other…" ? otherReason.trim() : reason)}
                   data-testid="transport-request-reject-confirm"
                 >
-                  Reject request
+                  Confirm rejection
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setRejecting(false)}>
-                  Back
+                  Cancel
                 </Button>
               </div>
             </div>
@@ -473,9 +620,45 @@ function DetailBody({
         </section>
       )}
 
+      {(alreadyOffered || [...offersByLeg.values()].some((l) => l.length > 0) || rows.some((r) => r.promised_eta_min != null)) && (
+        <section className="space-y-2" data-testid="transport-request-offers">
+          <Separator />
+          <h3 className="text-sm font-medium">Offers</h3>
+          {sortedLegs.map((leg) => (
+            <LegOffers
+              key={leg.id}
+              leg={leg}
+              offers={offersByLeg.get(leg.id) ?? []}
+              slots={slots}
+              actor={actor}
+              showLabel={rows.length > 1}
+              conflicts={conflicts.filter((c) => c.date === leg.service_date && c.direction === leg.direction)}
+            />
+          ))}
+          {alreadyOffered && (
+            <p className="text-xs text-muted-foreground">
+              {VOLTLINES_QUOTE_NOTE} Accepting records the promise against your name after the customer replies. Change the asked
+              time above and Offer again if they need a different time.
+            </p>
+          )}
+        </section>
+      )}
+
       <section className="space-y-2">
         <Separator />
         <h3 className="text-sm font-medium">What happened</h3>
+        {/* Who is answerable for each stage (AE requestTrail). */}
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md border p-3 text-sm" data-testid="transport-request-trail">
+          {trail.map((step) => (
+            <Fragment key={step.label}>
+              <dt className="text-muted-foreground">{step.label} by</dt>
+              <dd className="min-w-0">
+                {step.who ?? (step.at ? "Not recorded" : <span className="text-muted-foreground">Not yet</span>)}
+                {step.at && <span className="text-xs text-muted-foreground"> · {format(new Date(step.at), "d MMM, h:mm a")}</span>}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
         {events.length === 0 ? (
           <p className="text-xs text-muted-foreground">Nothing recorded yet.</p>
         ) : (
@@ -504,4 +687,126 @@ function dedupeEvents<T extends { at: string; action: string; actor: string | nu
     seen.add(key);
     return true;
   });
+}
+
+/** AE's same-day notice lines, for the "Approve and override" dialog. */
+function conflictMessages(conflicts: SameDayConflict[]): string[] {
+  return [
+    ...new Set(
+      conflicts.map(
+        (c) =>
+          `${c.petName} already has a ${c.direction === "pickup" ? "pickup" : "drop-off"}${c.time ? ` at ${c.time}` : ""} on ${dayDate(c.date)} (${c.source}).`,
+      ),
+    ),
+  ];
+}
+
+type TrailStep = { label: string; who: string | null; at: string | null };
+
+/** AE's requestTrail: Created by / Offered by / Approved by (or Rejected by). */
+export function requestTrail(
+  kind: string,
+  status: string,
+  lead: {
+    created_by: string | null;
+    created_at: string;
+    offered_by?: string | null;
+    offered_at?: string | null;
+    decided_by: string | null;
+    decided_at: string | null;
+  },
+): TrailStep[] {
+  const steps: TrailStep[] = [{ label: "Created", who: lead.created_by, at: lead.created_at }];
+  if (kind !== "cancel" && kind !== "pause") {
+    steps.push({
+      label: "Offered",
+      who: lead.offered_by ?? (status === "received" ? null : "No offer sent"),
+      at: lead.offered_at ?? null,
+    });
+  }
+  if (status === "rejected") {
+    steps.push({ label: "Rejected", who: lead.decided_by, at: lead.decided_at });
+    return steps;
+  }
+  steps.push({
+    label: "Approved",
+    who: status === "approved" ? lead.decided_by : null,
+    at: status === "approved" ? lead.decided_at : null,
+  });
+  return steps;
+}
+
+/**
+ * One leg's offers (AE LegOffers): accept or decline per journey, so accepting the
+ * drop-off's hour never carries the pickup's crossed-out options with it.
+ */
+function LegOffers({
+  leg,
+  offers,
+  slots,
+  actor,
+  showLabel,
+  conflicts,
+}: {
+  leg: TransportRequestWithDetails;
+  offers: TransportRequestOffer[];
+  slots: TransportSlot[];
+  actor: string;
+  showLabel: boolean;
+  conflicts: SameDayConflict[];
+}) {
+  const [declined, setDeclined] = useState<string[]>([]);
+  const accept = useAcceptRequestOffer();
+  const sameDay = useSameDayConfirm();
+  const panelOffers = storedToPanelOffers(offers);
+  const interactive = leg.status === "offered";
+  const settled = leg.status === "approved" && (leg.accepted_offer_id != null || leg.promised_eta_min != null);
+  const chosen = settled ? panelOffers.find((o) => o.offerId === leg.accepted_offer_id) ?? null : null;
+
+  return (
+    <div className="space-y-1.5">
+      {sameDay.dialog}
+      {showLabel && <p className="text-xs font-medium text-foreground">{legLabel(leg)}</p>}
+      {settled ? (
+        <PromiseBox
+          slotLabel={chosen?.slotLabel ?? null}
+          eta={chosen?.eta ?? (leg.promised_eta_min != null ? hhmm(leg.promised_eta_min) : null)}
+          acceptedAt={leg.decided_at}
+        />
+      ) : (
+        <OfferList
+          offers={panelOffers}
+          declined={declined}
+          onToggleDeclined={(id) => setDeclined((d) => (d.includes(id) ? d.filter((x) => x !== id) : [...d, id]))}
+          onAccept={(offerId) => {
+            const offer = offers.find((o) => o.id === offerId);
+            if (!offer) return;
+            sameDay.ask(conflictMessages(conflicts), () =>
+              accept.mutate(
+                {
+                  requestId: leg.id,
+                  direction: leg.direction,
+                  offer,
+                  declinedOfferIds: declined.filter((d) => d !== offer.id),
+                  slots,
+                  actor,
+                },
+                {
+                  onSuccess: (r) => toast.success(r.message),
+                  onError: (e) => toast.error((e as Error).message),
+                },
+              ),
+            );
+          }}
+          accepting={accept.isPending}
+          readOnly={!interactive}
+          emptyText={
+            showLabel
+              ? `No offers were stored for this leg — ${legLabel(leg).toLowerCase()}.`
+              : "No offers were stored for this request."
+          }
+        />
+      )}
+    </div>
+  );
 }

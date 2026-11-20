@@ -9,13 +9,15 @@ import {
   useRecordTransportRequest,
   useBoardingStaysFor,
   useTransportSlots,
+  minutesOf,
+  storeFormOffers,
   type TransportRequestInsert,
 } from "@/hooks/useTransport";
 import { isPetDeceased } from "@/lib/petDeceased";
 import { boardingClashes, dubaiToday } from "@/lib/transportSchedule";
 import { SHORT_DAYS, dayDate, nextDay, shortDate } from "@/lib/transportRequests";
 import { useSameDayConflicts } from "@/hooks/useTransport";
-import { HubOfferTimes } from "@/components/transport/HubOfferTimes";
+import { HubOfferTimes, type AcceptedOffer } from "@/components/transport/HubOfferTimes";
 import { PinField, emptyPin, pinReady, type PinDraft } from "@/components/transport/PinField";
 import { VoltlinesPetLink } from "@/components/transport/VoltlinesPetLink";
 import { PinBadge, dipFirst } from "@/components/transport/transportShared";
@@ -69,6 +71,8 @@ export function RequestForm({
   const [serviceDates, setServiceDates] = useState<string[]>([today]);
   const [weekdays, setWeekdays] = useState<string[]>([]);
   const [slotByDirection, setSlotByDirection] = useState<Partial<Record<Direction, string>>>({});
+  // An offer from the transport hub a person accepted (AE OfferList "Accept"), per way.
+  const [acceptedByDirection, setAcceptedByDirection] = useState<Partial<Record<Direction, AcceptedOffer>>>({});
   const [locationByDirection, setLocationByDirection] = useState<Record<Direction, LocationDraft>>({
     pickup: emptyLocation(),
     dropoff: emptyLocation(),
@@ -132,6 +136,8 @@ export function RequestForm({
   const conflictsAcknowledged = conflicts.length === 0 || acceptConflicts;
   // A new clash needs its own say-so.
   useEffect(() => setAcceptConflicts(false), [conflicts.length]);
+  // An accepted offer was for one dog on one day: a different dog or day starts over.
+  useEffect(() => setAcceptedByDirection({}), [selectedPetIds.join(","), datesChosen.join(",")]);
   const locationsReady = !allowsLocation || directions.every((d) => locationReady(locationByDirection[d]));
   /*
    * A one-off a boarding stay would pause: the board strikes it, so no van comes (AE).
@@ -162,6 +168,7 @@ export function RequestForm({
     setPauseFrom(today);
     setPauseUntil("");
     setSlotByDirection({});
+    setAcceptedByDirection({});
     setLocationByDirection({ pickup: emptyLocation(), dropoff: emptyLocation() });
     setNotes("");
     setOwnerSearch("");
@@ -248,18 +255,52 @@ export function RequestForm({
         needs_review: noPin,
         review_reason: noPin ? "No home pin — the van can't be routed" : null,
       };
+      /*
+       * An accepted hub offer is AE's accept: the promise is recorded against this
+       * person and the trip is approved, with the promise on the trip's note
+       * ("Promised: 08-09AM — collected around 08:20").
+       */
+      const offer = !isWeekly && datesChosen.length === 1 ? acceptedByDirection[direction] : undefined;
+      const slot = offer ? slotsFor(direction).find((s) => s.start_min === offer.startMin) ?? null : null;
+      const etaMin = offer?.eta ? minutesOf(offer.eta) : null;
+      const now = new Date().toISOString();
+      const promised = offer
+        ? {
+            status: "approved" as const,
+            decided_by: who,
+            decided_at: now,
+            offered_by: who,
+            offered_at: now,
+            promised_slot_id: slot?.id ?? null,
+            promised_window_start_min: slot?.start_min ?? (etaMin != null ? Math.max(0, etaMin - 30) : null),
+            promised_window_end_min: slot?.end_min ?? (etaMin != null ? Math.min(1439, etaMin + 30) : null),
+            promised_eta_min: etaMin,
+          }
+        : {};
       if (isWeekly) {
         for (const day of weekdays) rows.push({ ...base, ...legFields, weekday: Number(day), service_date: null });
       } else {
-        for (const date of datesChosen) rows.push({ ...base, ...legFields, service_date: date, weekday: null });
+        for (const date of datesChosen) rows.push({ ...base, ...legFields, ...promised, service_date: date, weekday: null });
       }
     }
     record.mutate(
       { rows, petIds: selectedPetIds },
       {
-        onSuccess: () => {
+        onSuccess: ({ groupId }) => {
+          // The options and the chosen one, stored as an Inbox Offer / Accept stores them.
+          const toStore = Object.fromEntries(
+            Object.entries(acceptedByDirection).filter(([, o]) => !!o && !isWeekly && datesChosen.length === 1),
+          ) as Partial<Record<Direction, AcceptedOffer>>;
+          if (Object.keys(toStore).length) {
+            storeFormOffers(groupId, toStore, who).catch((e: Error) =>
+              toast.error(`Saved, but the offers were not stored: ${e.message}`),
+            );
+          }
+          const allPromised = rows.length > 0 && rows.every((r) => r.status === "approved");
           toast.success(
-            isMove
+            allPromised
+              ? "Promise recorded and approved"
+              : isMove
               ? "Move recorded — approve it from the Inbox"
               : isCancellation
                 ? isPause ? "Pause recorded — approve it from the Inbox" : "Cancellation recorded — approve it from the Inbox"
@@ -603,7 +644,11 @@ export function RequestForm({
               <Label>{directions.length > 1 ? `${o.label} time` : "Time"}</Label>
               <Select
                 value={slotByDirection[o.value] ?? ""}
-                onValueChange={(value) => setSlotByDirection((prev) => ({ ...prev, [o.value]: value }))}
+                onValueChange={(value) => {
+                  setSlotByDirection((prev) => ({ ...prev, [o.value]: value }));
+                  // A time typed over an accepted offer is no longer that promise.
+                  setAcceptedByDirection((prev) => ({ ...prev, [o.value]: undefined }));
+                }}
               >
                 <SelectTrigger data-testid={`transport-request-slot-${o.value}`}>
                   <SelectValue placeholder="No time yet" />
@@ -623,8 +668,10 @@ export function RequestForm({
                   date={datesChosen.length === 1 ? datesChosen[0] : null}
                   direction={o.value}
                   askedStartMin={slotsFor(o.value).find((s) => s.id === slotByDirection[o.value])?.start_min ?? null}
-                  onPick={(startMin) => {
-                    const slot = slotsFor(o.value).find((s) => s.start_min === startMin);
+                  accepted={acceptedByDirection[o.value] ?? null}
+                  onAccept={(offer) => {
+                    setAcceptedByDirection((prev) => ({ ...prev, [o.value]: offer ?? undefined }));
+                    const slot = offer ? slotsFor(o.value).find((s) => s.start_min === offer.startMin) : null;
                     if (slot) setSlotByDirection((prev) => ({ ...prev, [o.value]: slot.id }));
                   }}
                 />

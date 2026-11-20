@@ -406,6 +406,7 @@ const PetProfilePage = () => {
       behaviour_notes: petBehaviourNotes(pet) || null,
       grooming_notes: pet.grooming_notes,
       other_notes: pet.other_notes,
+      driver_note: pet.driver_note,
       vet_name: pet.vet_name,
       vet_phone: pet.vet_phone,
       photo_url: pet.photo_url,
@@ -445,8 +446,18 @@ const PetProfilePage = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const photoUrl = await uploadPhoto();
+    const driverNote = (editForm.driver_note ?? "").trim() || null;
+    const driverNoteEdited = driverNote !== ((pet?.driver_note ?? "").trim() || null);
     updatePet.mutate(
-      { ...editForm, photo_url: photoUrl, special_alerts: serializePetSpecialAlerts(alertDraft) },
+      {
+        ...editForm,
+        photo_url: photoUrl,
+        special_alerts: serializePetSpecialAlerts(alertDraft),
+        driver_note: driverNote,
+        ...(driverNoteEdited
+          ? { driver_note_source: "staff", driver_note_updated_at: new Date().toISOString() }
+          : {}),
+      },
       {
       onSuccess: () => {
         toast.success("Pet updated");
@@ -718,6 +729,7 @@ const PetProfilePage = () => {
               { label: "Medications",          value: petMedicationNotes(pet) || null },
               { label: "Behavioural notes",    value: petBehaviourNotes(pet) || null },
               { label: "Grooming notes",       value: pet.grooming_notes },
+              { label: "Driver note (transport)", value: pet.driver_note },
             ].map(({ label, value }) => (
               <div key={label} className="space-y-0.5">
                 <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
@@ -1623,6 +1635,18 @@ const PetProfilePage = () => {
             <div className="space-y-2">
               <Label htmlFor="edit_grooming">Grooming notes</Label>
               <Textarea id="edit_grooming" rows={2} value={editForm.grooming_notes ?? ""} onChange={(e) => handleField("grooming_notes", e.target.value)} />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit_driver_note">Driver note (transport)</Label>
+              <Textarea
+                id="edit_driver_note"
+                data-testid="pet-driver-note-input"
+                rows={2}
+                value={editForm.driver_note ?? ""}
+                onChange={(e) => handleField("driver_note", e.target.value)}
+                placeholder="What the driver needs to know about this dog"
+              />
             </div>
 
             <div className="space-y-2">

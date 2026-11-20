@@ -2188,10 +2188,17 @@ export type Database = {
           other_notes: string | null
           phone: string | null
           phone2: string | null
+          pin_lat: number | null
+          pin_lng: number | null
+          pin_source: string | null
+          pin_updated_at: string | null
           preferred_groomer: string | null
           source_external_id: string | null
+          transport_notes: string | null
           updated_at: string
           vet_name: string | null
+          voltlines_branch_id: string | null
+          voltlines_customer_id: string | null
           vet_phone: string | null
           wallet_balance: number
         }
@@ -2227,11 +2234,18 @@ export type Database = {
           other_notes?: string | null
           phone?: string | null
           phone2?: string | null
+          pin_lat?: number | null
+          pin_lng?: number | null
+          pin_source?: string | null
+          pin_updated_at?: string | null
           preferred_groomer?: string | null
           source_external_id?: string | null
+          transport_notes?: string | null
           updated_at?: string
           vet_name?: string | null
           vet_phone?: string | null
+          voltlines_branch_id?: string | null
+          voltlines_customer_id?: string | null
           wallet_balance?: number
         }
         Update: {
@@ -2266,11 +2280,18 @@ export type Database = {
           other_notes?: string | null
           phone?: string | null
           phone2?: string | null
+          pin_lat?: number | null
+          pin_lng?: number | null
+          pin_source?: string | null
+          pin_updated_at?: string | null
           preferred_groomer?: string | null
           source_external_id?: string | null
+          transport_notes?: string | null
           updated_at?: string
           vet_name?: string | null
           vet_phone?: string | null
+          voltlines_branch_id?: string | null
+          voltlines_customer_id?: string | null
           wallet_balance?: number
         }
         Relationships: []
@@ -2540,6 +2561,9 @@ export type Database = {
           colour: string | null
           created_at: string
           date_of_birth: string | null
+          driver_note: string | null
+          driver_note_source: string | null
+          driver_note_updated_at: string | null
           feeding_instructions: string | null
           feeding_notes: string | null
           gender: Database["public"]["Enums"]["pet_gender"] | null
@@ -2566,6 +2590,7 @@ export type Database = {
           status: string | null
           updated_at: string
           vaccicheck_cav_value: number | null
+          voltlines_passenger_id: string | null
           vaccicheck_cdv_value: number | null
           vaccicheck_cpv_value: number | null
           vaccicheck_distemper_tier: string | null
@@ -2596,6 +2621,9 @@ export type Database = {
           colour?: string | null
           created_at?: string
           date_of_birth?: string | null
+          driver_note?: string | null
+          driver_note_source?: string | null
+          driver_note_updated_at?: string | null
           feeding_instructions?: string | null
           feeding_notes?: string | null
           gender?: Database["public"]["Enums"]["pet_gender"] | null
@@ -2622,6 +2650,7 @@ export type Database = {
           status?: string | null
           updated_at?: string
           vaccicheck_cav_value?: number | null
+          voltlines_passenger_id?: string | null
           vaccicheck_cdv_value?: number | null
           vaccicheck_cpv_value?: number | null
           vaccicheck_distemper_tier?: string | null
@@ -2652,6 +2681,9 @@ export type Database = {
           colour?: string | null
           created_at?: string
           date_of_birth?: string | null
+          driver_note?: string | null
+          driver_note_source?: string | null
+          driver_note_updated_at?: string | null
           feeding_instructions?: string | null
           feeding_notes?: string | null
           gender?: Database["public"]["Enums"]["pet_gender"] | null
@@ -2678,6 +2710,7 @@ export type Database = {
           status?: string | null
           updated_at?: string
           vaccicheck_cav_value?: number | null
+          voltlines_passenger_id?: string | null
           vaccicheck_cdv_value?: number | null
           vaccicheck_cpv_value?: number | null
           vaccicheck_distemper_tier?: string | null
@@ -3343,6 +3376,11 @@ export type Database = {
           is_active: boolean
           name: string
           phone: string | null
+          address_label: string | null
+          lat: number | null
+          lng: number | null
+          maps_link: string | null
+          location_source: string | null
         }
         Insert: {
           created_at?: string
@@ -3350,6 +3388,11 @@ export type Database = {
           is_active?: boolean
           name: string
           phone?: string | null
+          address_label?: string | null
+          lat?: number | null
+          lng?: number | null
+          maps_link?: string | null
+          location_source?: string | null
         }
         Update: {
           created_at?: string
@@ -3357,8 +3400,577 @@ export type Database = {
           is_active?: boolean
           name?: string
           phone?: string | null
+          address_label?: string | null
+          lat?: number | null
+          lng?: number | null
+          maps_link?: string | null
+          location_source?: string | null
         }
         Relationships: []
+      }
+      branches: {
+        Row: {
+          code: string
+          created_at: string
+          id: string
+          name: string
+          short_name: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          id?: string
+          name: string
+          short_name: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          id?: string
+          name?: string
+          short_name?: string
+        }
+        Relationships: []
+      }
+      transport_day_note: {
+        Row: {
+          direction: string
+          id: string
+          note: string
+          owner_id: string
+          service_date: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          direction: string
+          id?: string
+          note: string
+          owner_id: string
+          service_date: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          direction?: string
+          id?: string
+          note?: string
+          owner_id?: string
+          service_date?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_day_note_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "owners"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_facility: {
+        Row: {
+          branch_id: string | null
+          code: string
+          created_at: string
+          is_active: boolean
+          lat: number | null
+          lng: number | null
+          name: string
+          voltlines_address_match: string | null
+        }
+        Insert: {
+          branch_id?: string | null
+          code: string
+          created_at?: string
+          is_active?: boolean
+          lat?: number | null
+          lng?: number | null
+          name: string
+          voltlines_address_match?: string | null
+        }
+        Update: {
+          branch_id?: string | null
+          code?: string
+          created_at?: string
+          is_active?: boolean
+          lat?: number | null
+          lng?: number | null
+          name?: string
+          voltlines_address_match?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_facility_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_regular: {
+        Row: {
+          branch_id: string
+          brand: string
+          created_at: string
+          created_by: string | null
+          direction: string
+          dropoff_time: string | null
+          dropoff_window_end_min: number | null
+          dropoff_window_start_min: number | null
+          ends_on: string | null
+          hub_rule_id: string | null
+          id: string
+          is_active: boolean
+          notes: string | null
+          owner_id: string
+          paused_from: string | null
+          paused_until: string | null
+          pet_id: string
+          pickup_time: string | null
+          pickup_window_end_min: number | null
+          pickup_window_start_min: number | null
+          starts_on: string
+          transfer_to_branch_id: string | null
+          updated_at: string
+          weekday: number
+        }
+        Insert: {
+          branch_id: string
+          brand?: string
+          created_at?: string
+          created_by?: string | null
+          direction: string
+          dropoff_time?: string | null
+          dropoff_window_end_min?: number | null
+          dropoff_window_start_min?: number | null
+          ends_on?: string | null
+          hub_rule_id?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          owner_id: string
+          paused_from?: string | null
+          paused_until?: string | null
+          pet_id: string
+          pickup_time?: string | null
+          pickup_window_end_min?: number | null
+          pickup_window_start_min?: number | null
+          starts_on?: string
+          transfer_to_branch_id?: string | null
+          updated_at?: string
+          weekday: number
+        }
+        Update: {
+          branch_id?: string
+          brand?: string
+          created_at?: string
+          created_by?: string | null
+          direction?: string
+          dropoff_time?: string | null
+          dropoff_window_end_min?: number | null
+          dropoff_window_start_min?: number | null
+          ends_on?: string | null
+          hub_rule_id?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          owner_id?: string
+          paused_from?: string | null
+          paused_until?: string | null
+          pet_id?: string
+          pickup_time?: string | null
+          pickup_window_end_min?: number | null
+          pickup_window_start_min?: number | null
+          starts_on?: string
+          transfer_to_branch_id?: string | null
+          updated_at?: string
+          weekday?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_regular_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_regular_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "owners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_regular_pet_id_fkey"
+            columns: ["pet_id"]
+            isOneToOne: false
+            referencedRelation: "pets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_request: {
+        Row: {
+          applied_regular_ids: string[] | null
+          branch_id: string
+          brand: string
+          cadence: string | null
+          created_at: string
+          created_by: string | null
+          deadline_min: number | null
+          decided_at: string | null
+          decided_by: string | null
+          direction: string
+          ends_on: string | null
+          from_date: string | null
+          group_id: string
+          hub_request_id: string | null
+          id: string
+          kind: string
+          location_lat: number | null
+          location_lng: number | null
+          location_text: string | null
+          needs_review: boolean
+          notes: string | null
+          owner_id: string
+          paused_from: string | null
+          paused_until: string | null
+          purpose: string
+          rejection_reason: string | null
+          requested_slot_id: string | null
+          review_reason: string | null
+          service_date: string | null
+          starts_on: string | null
+          status: string
+          transfer_from_branch_id: string | null
+          transfer_to_branch_id: string | null
+          updated_at: string
+          updated_by: string | null
+          vet_visit_id: string | null
+          weekday: number | null
+          window_end_min: number | null
+          window_start_min: number | null
+        }
+        Insert: {
+          applied_regular_ids?: string[] | null
+          branch_id: string
+          brand?: string
+          cadence?: string | null
+          created_at?: string
+          created_by?: string | null
+          deadline_min?: number | null
+          decided_at?: string | null
+          decided_by?: string | null
+          direction: string
+          ends_on?: string | null
+          from_date?: string | null
+          group_id?: string
+          hub_request_id?: string | null
+          id?: string
+          kind?: string
+          location_lat?: number | null
+          location_lng?: number | null
+          location_text?: string | null
+          needs_review?: boolean
+          notes?: string | null
+          owner_id: string
+          paused_from?: string | null
+          paused_until?: string | null
+          purpose?: string
+          rejection_reason?: string | null
+          requested_slot_id?: string | null
+          review_reason?: string | null
+          service_date?: string | null
+          starts_on?: string | null
+          status?: string
+          transfer_from_branch_id?: string | null
+          transfer_to_branch_id?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          vet_visit_id?: string | null
+          weekday?: number | null
+          window_end_min?: number | null
+          window_start_min?: number | null
+        }
+        Update: {
+          applied_regular_ids?: string[] | null
+          branch_id?: string
+          brand?: string
+          cadence?: string | null
+          created_at?: string
+          created_by?: string | null
+          deadline_min?: number | null
+          decided_at?: string | null
+          decided_by?: string | null
+          direction?: string
+          ends_on?: string | null
+          from_date?: string | null
+          group_id?: string
+          hub_request_id?: string | null
+          id?: string
+          kind?: string
+          location_lat?: number | null
+          location_lng?: number | null
+          location_text?: string | null
+          needs_review?: boolean
+          notes?: string | null
+          owner_id?: string
+          paused_from?: string | null
+          paused_until?: string | null
+          purpose?: string
+          rejection_reason?: string | null
+          requested_slot_id?: string | null
+          review_reason?: string | null
+          service_date?: string | null
+          starts_on?: string | null
+          status?: string
+          transfer_from_branch_id?: string | null
+          transfer_to_branch_id?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          vet_visit_id?: string | null
+          weekday?: number | null
+          window_end_min?: number | null
+          window_start_min?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_request_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_request_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "owners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_request_requested_slot_id_fkey"
+            columns: ["requested_slot_id"]
+            isOneToOne: false
+            referencedRelation: "transport_slots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_request_pet_request_id_fkey"
+            columns: ["id"]
+            isOneToOne: false
+            referencedRelation: "transport_request_pet"
+            referencedColumns: ["request_id"]
+          },
+        ]
+      }
+      transport_request_event: {
+        Row: {
+          action: string
+          actor: string | null
+          at: string
+          detail: string | null
+          group_id: string
+          id: string
+          request_id: string
+        }
+        Insert: {
+          action: string
+          actor?: string | null
+          at?: string
+          detail?: string | null
+          group_id: string
+          id?: string
+          request_id: string
+        }
+        Update: {
+          action?: string
+          actor?: string | null
+          at?: string
+          detail?: string | null
+          group_id?: string
+          id?: string
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_request_event_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "transport_request"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_request_pet: {
+        Row: {
+          pet_id: string
+          request_id: string
+        }
+        Insert: {
+          pet_id: string
+          request_id: string
+        }
+        Update: {
+          pet_id?: string
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_request_pet_pet_id_fkey"
+            columns: ["pet_id"]
+            isOneToOne: false
+            referencedRelation: "pets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_request_pet_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "transport_request"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transport_slots: {
+        Row: {
+          created_at: string
+          direction: string
+          end_min: number
+          id: string
+          is_active: boolean
+          label: string
+          start_min: number
+        }
+        Insert: {
+          created_at?: string
+          direction: string
+          end_min: number
+          id?: string
+          is_active?: boolean
+          label: string
+          start_min: number
+        }
+        Update: {
+          created_at?: string
+          direction?: string
+          end_min?: number
+          id?: string
+          is_active?: boolean
+          label?: string
+          start_min?: number
+        }
+        Relationships: []
+      }
+      transport_vet_visit: {
+        Row: {
+          appointment_date: string
+          appointment_time_min: number
+          arrive_buffer_min: number
+          branch_id: string
+          created_at: string
+          created_by: string | null
+          expected_duration_min: number | null
+          home_request_id: string | null
+          home_window_end_min: number | null
+          home_window_start_min: number | null
+          id: string
+          notes: string | null
+          outbound_request_id: string | null
+          owner_id: string
+          pet_ids: string[]
+          ready_time_min: number | null
+          return_date: string | null
+          return_request_id: string | null
+          return_to: string
+          status: string
+          updated_at: string
+          updated_by: string | null
+          vet_clinic_id: string | null
+          vet_label: string
+          vet_lat: number | null
+          vet_lng: number | null
+          visit_mode: string
+        }
+        Insert: {
+          appointment_date: string
+          appointment_time_min: number
+          arrive_buffer_min?: number
+          branch_id: string
+          created_at?: string
+          created_by?: string | null
+          expected_duration_min?: number | null
+          home_request_id?: string | null
+          home_window_end_min?: number | null
+          home_window_start_min?: number | null
+          id?: string
+          notes?: string | null
+          outbound_request_id?: string | null
+          owner_id: string
+          pet_ids: string[]
+          ready_time_min?: number | null
+          return_date?: string | null
+          return_request_id?: string | null
+          return_to?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+          vet_clinic_id?: string | null
+          vet_label: string
+          vet_lat?: number | null
+          vet_lng?: number | null
+          visit_mode: string
+        }
+        Update: {
+          appointment_date?: string
+          appointment_time_min?: number
+          arrive_buffer_min?: number
+          branch_id?: string
+          created_at?: string
+          created_by?: string | null
+          expected_duration_min?: number | null
+          home_request_id?: string | null
+          home_window_end_min?: number | null
+          home_window_start_min?: number | null
+          id?: string
+          notes?: string | null
+          outbound_request_id?: string | null
+          owner_id?: string
+          pet_ids?: string[]
+          ready_time_min?: number | null
+          return_date?: string | null
+          return_request_id?: string | null
+          return_to?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+          vet_clinic_id?: string | null
+          vet_label?: string
+          vet_lat?: number | null
+          vet_lng?: number | null
+          visit_mode?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transport_vet_visit_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "owners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transport_vet_visit_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       waiting_list: {
         Row: {
@@ -3673,6 +4285,30 @@ export type Database = {
     }
     Functions: {
       _agent_owner_for_phone: { Args: { p_phone: string }; Returns: string }
+      transport_client_schedule: {
+        Args: { p_days?: number; p_from: string; p_owner_id: string }
+        Returns: Json
+      }
+      transport_day_demand: {
+        Args: { p_branch_id?: string; p_date: string }
+        Returns: Json
+      }
+      transport_regular_split: {
+        Args: { p_keep: string; p_regular_id: string }
+        Returns: string
+      }
+      transport_request_decide: {
+        Args: { p_action: string; p_actor: string; p_reason?: string; p_request_ids: string[] }
+        Returns: number
+      }
+      transport_vet_visit_set_status: {
+        Args: { p_actor: string; p_id: string; p_status: string }
+        Returns: undefined
+      }
+      transport_vet_visit_write: {
+        Args: { p_actor: string; p_legs: Json; p_visit: Json }
+        Returns: string
+      }
       agent_add_booking_addon: {
         Args: { p_addon: Json; p_booking_id: string; p_phone: string }
         Returns: Json

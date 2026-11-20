@@ -108,6 +108,7 @@ import {
   CalendarDays,
   BedDouble,
   ExternalLink,
+  MapPin,
   FileText,
   CreditCard,
   Printer,
@@ -116,6 +117,9 @@ import {
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
 import { PurchasePackageDialog } from "@/components/packages/PurchasePackageDialog";
+import { OwnerTransportSection } from "@/components/transport/OwnerTransportSection";
+import { PinField, emptyPin, pinReady, savedPin, type PinDraft } from "@/components/transport/PinField";
+import { mapsUrl, pinAreaLabel } from "@/lib/transportPin";
 
 type BookingStatus = Database["public"]["Enums"]["booking_status"];
 type OwnerUpdate = Database["public"]["Tables"]["owners"]["Update"];
@@ -827,6 +831,7 @@ const OwnerProfilePage = () => {
   const [ownerForm, setOwnerForm] = useState<OwnerUpdate & { id: string }>({
     id: id!,
   });
+  const [pinDraft, setPinDraft] = useState<PinDraft>(emptyPin());
   const [petForm, setPetForm] = useState<PetInsert>(makePetForm(id!));
   const [vaccinationRows, setVaccinationRows] = useState<VaccinationRow[]>([]);
 
@@ -878,7 +883,9 @@ const OwnerProfilePage = () => {
         is_vip: owner.is_vip,
         always_same_room: owner.always_same_room,
         camera_required: owner.camera_required,
+        transport_notes: owner.transport_notes,
       });
+      setPinDraft(savedPin(owner.pin_lat, owner.pin_lng, pinAreaLabel(owner.pin_lat, owner.pin_lng)));
     }
     setEditOwnerOpen(true);
   };
@@ -893,7 +900,30 @@ const OwnerProfilePage = () => {
 
   const handleOwnerSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateOwner.mutate(ownerForm as OwnerUpdate & { id: string }, {
+    if (pinDraft.status === "checking") {
+      toast.error("Still reading the pin — try again in a moment");
+      return;
+    }
+    if (pinDraft.status === "error" || (pinDraft.status === "idle" && pinDraft.text.trim())) {
+      toast.error("The home pin isn't usable. Fix it or clear the field.");
+      return;
+    }
+    const nextLat = pinReady(pinDraft) ? pinDraft.pin!.lat : null;
+    const nextLng = pinReady(pinDraft) ? pinDraft.pin!.lng : null;
+    const pinChanged = nextLat !== (owner?.pin_lat ?? null) || nextLng !== (owner?.pin_lng ?? null);
+    const payload: OwnerUpdate & { id: string } = {
+      ...ownerForm,
+      transport_notes: (ownerForm.transport_notes ?? "").trim() || null,
+      ...(pinChanged
+        ? {
+            pin_lat: nextLat,
+            pin_lng: nextLng,
+            pin_source: nextLat == null ? null : pinDraft.pin!.source,
+            pin_updated_at: new Date().toISOString(),
+          }
+        : {}),
+    };
+    updateOwner.mutate(payload, {
       onSuccess: () => {
         toast.success("Owner updated");
         setEditOwnerOpen(false);
@@ -1043,6 +1073,23 @@ const OwnerProfilePage = () => {
               {owner.email && (
                 <p className="text-sm text-muted-foreground">{owner.email}</p>
               )}
+              {owner.address?.trim() ? (
+                <p className="text-sm text-muted-foreground">{owner.address.trim()}</p>
+              ) : null}
+              {owner.pin_lat != null && owner.pin_lng != null ? (
+                <p className="flex items-center gap-1 text-sm text-muted-foreground">
+                  <MapPin className="h-3.5 w-3.5" />
+                  <a className="underline" href={mapsUrl(owner.pin_lat, owner.pin_lng)} target="_blank" rel="noreferrer">
+                    Home pin{pinAreaLabel(owner.pin_lat, owner.pin_lng) ? ` · ${pinAreaLabel(owner.pin_lat, owner.pin_lng)}` : ""}
+                  </a>
+                </p>
+              ) : null}
+              {owner.transport_notes?.trim() ? (
+                <p className="text-sm text-muted-foreground" data-testid="owner-transport-notes">
+                  <span className="font-medium text-foreground">Transport: </span>
+                  {owner.transport_notes.trim()}
+                </p>
+              ) : null}
               <Badge
                 variant="outline"
                 className="bg-slate-100 text-slate-700 border-slate-200"
@@ -1293,6 +1340,8 @@ const OwnerProfilePage = () => {
             </div>
           )}
         </section>
+
+        <OwnerTransportSection ownerId={owner.id} />
 
         {/* ─── Booking history (stays, grooming) ─── */}
         <section>
@@ -1770,6 +1819,31 @@ const OwnerProfilePage = () => {
               <div className="space-y-2">
                 <Label htmlFor="edit_address">Address</Label>
                 <Textarea id="edit_address" rows={2} value={ownerForm.address ?? ""} onChange={(e) => handleOwnerField("address", e.target.value)} />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit_pin">Home pin (transport)</Label>
+                <PinField
+                  id="edit_pin"
+                  value={pinDraft}
+                  onChange={setPinDraft}
+                  hint="Transport routes to the pin, not the text. Ask the client to share a dropped pin, or paste lat, lng. The pin is used for every dog in this household."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit_transport_notes">Transport notes</Label>
+                <Textarea
+                  id="edit_transport_notes"
+                  data-testid="owner-transport-notes-input"
+                  rows={2}
+                  value={ownerForm.transport_notes ?? ""}
+                  onChange={(e) => handleOwnerField("transport_notes", e.target.value)}
+                  placeholder="Gate code, call on arrival, dogs wait in the garage…"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Standing instruction for the drivers. Shown on every transport board for this household.
+                </p>
               </div>
 
               <Separator />

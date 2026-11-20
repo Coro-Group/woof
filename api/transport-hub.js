@@ -1,0 +1,142 @@
+// /api/transport-hub — Woof ⇄ the transport hub (admin-essentials).
+//
+//   GET  ?status=1  → { enabled, configured, hub }
+//   POST { op: "quote", petId, date, direction, startMin, location? }
+//   POST { op: "sync" }  admin / management. Sends today + 56 days.
+//
+// Refused unless TRANSPORT_HUB_ENABLED is exactly "true" and the AE URL and secret are set.
+
+export const config = { maxDuration: 120 };
+
+import { createClient } from "@supabase/supabase-js";
+import { SYNC_DAYS, addDays, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
+
+function json(res, status, body) {
+  res.status(status).setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
+class HttpError extends Error {
+  constructor(status, message, details) {
+    super(message);
+    this.status = status;
+    this.details = details;
+  }
+}
+
+const dubaiToday = () => new Date(Date.now() + 4 * 3600 * 1000).toISOString().slice(0, 10);
+
+async function caller(req) {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anon =
+    process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !anon) throw new HttpError(500, "Missing Supabase server env vars");
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) throw new HttpError(401, "Not authorised");
+  const db = createClient(url, anon, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+  const { data, error } = await db.auth.getUser(token);
+  if (error || !data?.user) throw new HttpError(401, "Not authorised");
+  const email = data.user.email;
+  let staff = null;
+  if (email) ({ data: staff } = await db.from("staff").select("active, role").ilike("email", email).maybeSingle());
+  if (!staff) ({ data: staff } = await db.from("staff").select("active, role").eq("id", data.user.id).maybeSingle());
+  if (!staff?.active) throw new HttpError(403, "Only active staff can use the transport hub");
+  return { db, staff };
+}
+
+function requireSwitchedOn() {
+  if (!hubEnabled()) throw new HttpError(503, "The link to the transport hub is switched off");
+  if (!hubConfigured()) throw new HttpError(503, "The transport hub address or secret is not set");
+}
+
+async function quote(db, body) {
+  const { petId, date, direction, startMin, location } = body ?? {};
+  if (!petId || !/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? ""))) throw new HttpError(422, "petId and date are required");
+  if (direction !== "pickup" && direction !== "dropoff") throw new HttpError(422, "direction must be pickup or dropoff");
+  if (!Number.isInteger(startMin)) throw new HttpError(422, "startMin is required (the hour asked for)");
+  const { data: pet } = await db.from("pets").select("id, voltlines_passenger_id").eq("id", petId).maybeSingle();
+  if (!pet) throw new HttpError(404, "Dog not found");
+  if (!pet.voltlines_passenger_id) {
+    throw new HttpError(409, "This dog is not on Voltlines yet — link the passenger on the request");
+  }
+  return hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...(location ? { location } : {}) });
+}
+
+async function sync(db) {
+  const from = dubaiToday();
+  const to = addDays(from, SYNC_DAYS - 1);
+  const { data: regulars, error: rErr } = await db.from("transport_regular").select("*").eq("is_active", true);
+  if (rErr) throw new HttpError(500, rErr.message);
+
+  const dates = Array.from({ length: SYNC_DAYS }, (_, i) => addDays(from, i));
+  const days = [];
+  for (let i = 0; i < dates.length; i += 8) {
+    const batch = await Promise.all(
+      dates.slice(i, i + 8).map(async (date) => {
+        const { data, error } = await db.rpc("transport_day_demand", { p_date: date, p_branch_id: null });
+        if (error) throw new HttpError(500, `Reading ${date}: ${error.message}`);
+        return { date, stops: data ?? [] };
+      }),
+    );
+    days.push(...batch);
+  }
+
+  const petIds = new Set((regulars ?? []).map((r) => r.pet_id));
+  for (const d of days) for (const s of d.stops) if (s.pet_id) petIds.add(s.pet_id);
+  const pets = new Map();
+  const ids = [...petIds];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await db
+      .from("pets")
+      .select("id, name, voltlines_passenger_id, owners(first_name, last_name, pin_lat, pin_lng)")
+      .in("id", ids.slice(i, i + 200));
+    if (error) throw new HttpError(500, error.message);
+    for (const p of data ?? []) pets.set(p.id, { ...p, owner: p.owners });
+  }
+
+  const { body, notSent } = buildHubSync({ from, to, regulars: regulars ?? [], days, pets });
+  const hub = await hubPost(body);
+  const byDog = new Map();
+  for (const n of notSent) {
+    const key = `${n.petId}|${n.reason}`;
+    const held = byDog.get(key) ?? { petId: n.petId, pet: n.pet, reason: n.reason, count: 0 };
+    held.count += 1;
+    byDog.set(key, held);
+  }
+  return {
+    ok: true,
+    range: { from, to },
+    sent: { dogs: body.clients.length, regulars: body.rules.length, dated: body.requests.length },
+    hub,
+    notSent: [...byDog.values()].sort((a, b) => String(a.pet).localeCompare(String(b.pet))),
+  };
+}
+
+export default async function handler(req, res) {
+  try {
+    if (req.method === "GET") {
+      await caller(req);
+      const enabled = hubEnabled();
+      const configured = hubConfigured();
+      let hub = null;
+      if (enabled && configured) hub = await hubPost({ op: "status" }).catch((err) => ({ enabled: false, error: err.message }));
+      return json(res, 200, { enabled, configured, hub });
+    }
+    if (req.method !== "POST") return json(res, 405, { error: "GET or POST only" });
+    const { db, staff } = await caller(req);
+    requireSwitchedOn();
+    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
+    if (body.op === "quote") return json(res, 200, await quote(db, body));
+    if (body.op === "sync") {
+      if (!["admin", "management"].includes(staff.role)) throw new HttpError(403, "Only admin or management can sync with the hub");
+      return json(res, 200, await sync(db));
+    }
+    return json(res, 400, { error: "Unknown op" });
+  } catch (err) {
+    return json(res, err.status || 500, { error: err.message, details: err.details ?? null, code: err.code ?? null });
+  }
+}

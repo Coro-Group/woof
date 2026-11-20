@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppVersionNotifier } from "@/components/AppVersionNotifier";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { BranchProvider } from "@/contexts/BranchContext";
 import { Loader2 } from "lucide-react";
 import DashboardLayout from "@/layouts/DashboardLayout";
 import LoginPage from "@/pages/LoginPage";
@@ -31,6 +32,7 @@ import SettingsPage from "@/pages/SettingsPage";
 import VetsAdminPage from "@/pages/VetsAdmin";
 import StaffAdminPage from "@/pages/StaffAdmin";
 import DataIssuesAdminPage from "@/pages/DataIssuesAdmin";
+import TransportPage from "@/pages/Transport";
 import KennelCardPrintPage from "@/pages/print/KennelCardPrintPage";
 import KennelCardsPrintPage from "@/pages/print/KennelCardsPrintPage";
 import KennelMapPrintPage from "@/pages/print/KennelMapPrintPage";
@@ -94,6 +96,7 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
+    <BranchProvider>
     <AuthProvider>
       <TooltipProvider>
         <Toaster />
@@ -118,6 +121,7 @@ const App = () => (
               <Route path="customers/:ownerId/pets/:petId" element={<PetProfilePage />} />
               <Route path="boarding" element={<BoardingPage />} />
               <Route path="daycare" element={<DaycarePage />} />
+              <Route path="transport" element={<TransportPage />} />
               <Route path="dashboard/checkins" element={<ServiceCheckinsPage />} />
               <Route path="daily-checklist" element={<DailyChecklistPage />} />
               <Route path="agent" element={<AgentPage />} />
@@ -141,6 +145,7 @@ const App = () => (
         </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>
+    </BranchProvider>
   </QueryClientProvider>
 );
 

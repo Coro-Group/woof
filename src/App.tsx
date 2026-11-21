@@ -33,6 +33,7 @@ import VetsAdminPage from "@/pages/VetsAdmin";
 import StaffAdminPage from "@/pages/StaffAdmin";
 import DataIssuesAdminPage from "@/pages/DataIssuesAdmin";
 import TransportPage from "@/pages/Transport";
+import VisitRequestsPage from "@/pages/VisitRequests";
 import KennelCardPrintPage from "@/pages/print/KennelCardPrintPage";
 import KennelCardsPrintPage from "@/pages/print/KennelCardsPrintPage";
 import KennelMapPrintPage from "@/pages/print/KennelMapPrintPage";
@@ -117,6 +118,7 @@ const App = () => (
             <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
               <Route index element={<DashboardPage />} />
               <Route path="customers" element={<CustomersPage />} />
+              <Route path="visit-requests" element={<VisitRequestsPage />} />
               <Route path="customers/:id" element={<OwnerProfilePage />} />
               <Route path="customers/:ownerId/pets/:petId" element={<PetProfilePage />} />
               <Route path="boarding" element={<BoardingPage />} />

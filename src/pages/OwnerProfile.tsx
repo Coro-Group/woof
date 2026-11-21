@@ -117,6 +117,7 @@ import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
 import { PurchasePackageDialog } from "@/components/packages/PurchasePackageDialog";
 import { OwnerTransportSection } from "@/components/transport/OwnerTransportSection";
+import { pushOwnerHomeToVoltlines } from "@/hooks/useVoltlines";
 import { PinField, emptyPin, pinReady, savedPin, type PinDraft } from "@/components/transport/PinField";
 import { mapsUrl, pinAreaLabel } from "@/lib/transportPin";
 
@@ -909,6 +910,7 @@ const OwnerProfilePage = () => {
     const nextLat = pinReady(pinDraft) ? pinDraft.pin!.lat : null;
     const nextLng = pinReady(pinDraft) ? pinDraft.pin!.lng : null;
     const pinChanged = nextLat !== (owner?.pin_lat ?? null) || nextLng !== (owner?.pin_lng ?? null);
+    const addressChanged = (ownerForm.address ?? "").trim() !== (owner?.address ?? "").trim();
     const payload: OwnerUpdate & { id: string } = {
       ...ownerForm,
       transport_notes: (ownerForm.transport_notes ?? "").trim() || null,
@@ -922,8 +924,20 @@ const OwnerProfilePage = () => {
         : {}),
     };
     updateOwner.mutate(payload, {
-      onSuccess: () => {
-        toast.success("Owner updated");
+      onSuccess: async () => {
+        // Every dog of the household on Voltlines gets the same door: moving one and
+        // not its sibling splits the stop. Voltlines refusing never loses the save.
+        if (addressChanged || pinChanged) {
+          try {
+            const sent = await pushOwnerHomeToVoltlines(payload.id);
+            toast.success(sent.updated?.length ? `Owner updated. ${sent.message}` : "Owner updated");
+          } catch (err) {
+            toast.success("Owner updated");
+            toast.error(`Voltlines was not updated: ${(err as Error).message}`);
+          }
+        } else {
+          toast.success("Owner updated");
+        }
         setEditOwnerOpen(false);
       },
       onError: (err) => {

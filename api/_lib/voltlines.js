@@ -1,7 +1,7 @@
 // Voltlines Control Tower client — reads, plus ONE switched-off write path.
 //
-// Petzania is not connected to Voltlines yet. The transport team's hub is
-// admin-essentials (AE), which talks to Voltlines; in step 2 Petzania hands its
+// Woof's clients are not on Voltlines yet — the team creates them from here. The
+// transport team's hub is admin-essentials (AE), which also talks to Voltlines; Woof hands its
 // requests and regulars to AE. This file is the same client as AE's
 // api/_lib/voltlines.js, cut down to reads, so that step 2 starts from a tested
 // connection instead of a new one:
@@ -22,7 +22,7 @@
 // Things AE learned the hard way, kept here:
 //   * Every request names its caller in User-Agent. Voltlines answers Node's default
 //     ("node") with 403 "This client is not allowed", and rate-limits by that name, so
-//     Petzania uses its own name (not AE's) and it is overridable by env.
+//     Woof uses its own name (not AE's) and it is overridable by env.
 //   * A 429 "Throttled" says how long to wait (error.details.wait, seconds); waits up
 //     to a minute are retried within a 90 s budget. "LimitExceeded" is a block that
 //     waiting does not lift and is not retried.
@@ -128,7 +128,7 @@ export async function voltlinesPatch(path, body) {
 
 async function voltlinesSend(method, path, body) {
   if (!voltlinesWritesEnabled()) {
-    const err = new Error("Voltlines writes are switched off for Petzania (VOLTLINES_WRITE_ENABLED)");
+    const err = new Error("Voltlines writes are switched off for Woof (VOLTLINES_WRITE_ENABLED)");
     err.status = 503;
     err.code = "writes_disabled";
     throw err;
@@ -172,7 +172,7 @@ export async function voltlinesPaginate(path, { maxPages = 50 } = {}) {
  */
 export async function voltlinesConnectionCheck() {
   if (!voltlinesConfigured()) {
-    return { ok: false, state: "not_configured", message: "No Voltlines token is set for Petzania yet." };
+    return { ok: false, state: "not_configured", message: "No Voltlines token is set for Woof yet." };
   }
   try {
     const res = await voltlinesGet("v3/passenger/?page_size=1", { retry: false });

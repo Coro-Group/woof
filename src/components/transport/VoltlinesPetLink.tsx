@@ -2,7 +2,13 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLinkVoltlinesPassenger, useSearchVoltlinesPassengers, useUnlinkVoltlinesPassenger } from "@/hooks/useVoltlines";
+import {
+  useCreateVoltlinesPassenger,
+  useLinkVoltlinesPassenger,
+  useSearchVoltlinesPassengers,
+  useUnlinkVoltlinesPassenger,
+  useVoltlinesStatus,
+} from "@/hooks/useVoltlines";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -21,6 +27,20 @@ export function VoltlinesPetLink({
   const search = useSearchVoltlinesPassengers();
   const link = useLinkVoltlinesPassenger();
   const unlink = useUnlinkVoltlinesPassenger();
+  const create = useCreateVoltlinesPassenger();
+  const status = useVoltlinesStatus();
+  // Woof's clients are not on Voltlines yet, so creating is the usual path, not a
+  // fallback. It is off until MSH agree to writes on the account they share.
+  const canCreate = status.data?.writesEnabled === true && status.data?.projectConfigured === true;
+  const whyNotCreate = !status.data
+    ? "Checking Voltlines…"
+    : !status.data.configured
+      ? "Woof has no Voltlines token yet."
+      : !status.data.writesEnabled
+        ? "Creating on Voltlines is switched off — the account is MSH dispatch's."
+        : !status.data.projectConfigured
+          ? "Woof's Voltlines project is not set (VOLTLINES_PROJECT_ID)."
+          : null;
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pets"] });
 
   return (
@@ -68,7 +88,33 @@ export function VoltlinesPetLink({
             Unlink
           </Button>
         )}
+        {!passengerId && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!canCreate || create.isPending}
+            title={whyNotCreate ?? "Create this dog and, if needed, the household on Voltlines"}
+            data-testid="transport-voltlines-create"
+            onClick={() =>
+              create.mutate(
+                { petId },
+                {
+                  onSuccess: (res) => {
+                    toast.success(res.message);
+                    refresh();
+                  },
+                  onError: (err) => toast.error(err.message),
+                },
+              )
+            }
+          >
+            {create.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            Create on Voltlines
+          </Button>
+        )}
       </div>
+      {!passengerId && whyNotCreate && <p className="text-xs text-muted-foreground">{whyNotCreate}</p>}
       {search.data && (
         <div className="max-h-40 space-y-1 overflow-y-auto">
           {search.data.passengers.length === 0 && <p className="text-xs text-muted-foreground">Nobody matches.</p>}

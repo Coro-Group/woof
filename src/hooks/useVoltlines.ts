@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
 export type VoltlinesHit = {
@@ -82,5 +82,43 @@ export function useVoltlinesDirectorySync() {
       }
       return { saved, total, complete: !next };
     },
+  });
+}
+
+export type VoltlinesStatus = { configured: boolean; writesEnabled: boolean; projectConfigured: boolean };
+
+/** Whether Woof can talk to Voltlines at all, and whether it may write. */
+export function useVoltlinesStatus() {
+  return useQuery({
+    queryKey: ["voltlines", "status"],
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: () => voltlinesApi<VoltlinesStatus>("/api/transport-voltlines?status=1"),
+  });
+}
+
+/**
+ * Create the dog on Voltlines: beside a sibling already there, else a whole new
+ * household (customer, branch, passenger) at the owner's home pin. Woof's clients are
+ * not on Voltlines yet, so this is how they get there.
+ */
+export function useCreateVoltlinesPassenger() {
+  return useMutation({
+    mutationFn: (input: { petId: string; addressLine?: string }) =>
+      voltlinesApi<{ message: string; passengerId: string; steps: unknown[] }>("/api/transport-voltlines", {
+        method: "POST",
+        body: JSON.stringify({ op: "create", ...input }),
+      }),
+  });
+}
+
+/**
+ * The client profile saved a new address or pin: give every linked dog of that
+ * household the same door. Moving one and not its sibling splits the stop.
+ */
+export function pushOwnerHomeToVoltlines(ownerId: string) {
+  return voltlinesApi<{ message: string; updated: { pet?: string; ok: boolean }[] }>("/api/transport-voltlines", {
+    method: "POST",
+    body: JSON.stringify({ op: "push_owner_home", ownerId }),
   });
 }

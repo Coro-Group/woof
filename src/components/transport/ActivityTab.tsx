@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const ACTION: Record<string, string> = {
   recorded: "recorded",
+  offered: "offered times on",
   approved: "approved",
   rejected: "rejected",
   cancelled: "withdrew / cancelled",

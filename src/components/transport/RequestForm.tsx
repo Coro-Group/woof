@@ -20,8 +20,10 @@ import { useSameDayConflicts } from "@/hooks/useTransport";
 import { HubOfferTimes, type AcceptedOffer } from "@/components/transport/HubOfferTimes";
 import { PinField, emptyPin, pinReady, type PinDraft } from "@/components/transport/PinField";
 import { VoltlinesPetLink } from "@/components/transport/VoltlinesPetLink";
+import { TONE } from "@/components/transport/status";
 import { PinBadge, dipFirst } from "@/components/transport/transportShared";
 import { VaccineStatusBadge } from "@/components/VaccineStatusBadge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -94,6 +96,8 @@ export function RequestForm({
   const { data: owner } = useOwner(ownerId ?? "");
   const { data: petsRaw = [], isLoading: petsLoading } = usePets(ownerId ?? "");
   const pets = petsRaw.filter((p) => !isPetDeceased(p));
+  /** Selected dogs the vans cannot see yet — AE names them rather than failing later. */
+  const missingVoltlines = pets.filter((p) => selectedPetIds.includes(p.id) && !p.voltlines_passenger_id);
   const slots = useTransportSlots();
   const createOwner = useCreateOwner();
   const createPet = useCreatePet();
@@ -478,6 +482,13 @@ export function RequestForm({
                   />
                   <span className="capitalize truncate">{pet.name}</span>
                   <VaccineStatusBadge petId={pet.id} />
+                  {/* AE shows every dog's Voltlines state here, not just the one that is selected:
+                      a request for a dog the vans cannot see is the thing staff must notice first. */}
+                  {pet.voltlines_passenger_id ? (
+                    <Badge variant="outline" className={`text-[10px] ${TONE.good.badge}`}>On Voltlines</Badge>
+                  ) : (
+                    <Badge variant="outline" className={`text-[10px] ${TONE.warn.badge}`}>Not on Voltlines</Badge>
+                  )}
                   <span className="flex-1" />
                   {pet.driver_note?.trim() && (
                     <span className="text-xs text-muted-foreground truncate max-w-[50%]">{pet.driver_note.trim()}</span>
@@ -486,13 +497,23 @@ export function RequestForm({
               ))}
             </div>
           )}
-          {selectedPetIds.length === 1 && (
-            <VoltlinesPetLink
-              petId={selectedPetIds[0]}
-              petName={pets.find((p) => p.id === selectedPetIds[0])?.name ?? "This dog"}
-              passengerId={pets.find((p) => p.id === selectedPetIds[0])?.voltlines_passenger_id ?? null}
-            />
+          {missingVoltlines.length > 0 && (
+            <div className={`rounded-md border p-3 text-sm ${TONE.warn.bg} ${TONE.warn.border}`}>
+              <p className={`font-medium ${TONE.warn.text}`}>
+                {missingVoltlines.length === 1
+                  ? `${missingVoltlines[0].name} is`
+                  : `${missingVoltlines.map((p) => p.name).join(" and ")} are`}{" "}
+                not on Voltlines
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The request still saves. Link each one below so the vans can take it.
+              </p>
+            </div>
           )}
+          {/* One panel per dog that still needs linking — a second dog used to hide the control. */}
+          {missingVoltlines.map((pet) => (
+            <VoltlinesPetLink key={pet.id} petId={pet.id} petName={pet.name} passengerId={null} />
+          ))}
         </div>
       )}
 

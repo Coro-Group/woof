@@ -5,6 +5,7 @@ import { useBranch } from "@/contexts/BranchContext";
 import { useCreateOwner, useOwner, useOwners } from "@/hooks/useOwners";
 import { useCreatePet, usePets } from "@/hooks/usePets";
 import {
+  useAdoptVoltlinesHomePin,
   useCurrentStaffName,
   useRecordTransportRequest,
   useBoardingStaysFor,
@@ -97,6 +98,10 @@ export function RequestForm({
   const { data: petsRaw = [], isLoading: petsLoading } = usePets(ownerId ?? "");
   const pets = petsRaw.filter((p) => !isPetDeceased(p));
   /** Selected dogs the vans cannot see yet — AE names them rather than failing later. */
+  const voltlinesHome = useAdoptVoltlinesHomePin(owner?.id === ownerId ? owner : null);
+  const homeLat = owner?.id === ownerId ? owner.pin_lat ?? voltlinesHome?.lat ?? null : null;
+  const homeLng = owner?.id === ownerId ? owner.pin_lng ?? voltlinesHome?.lng ?? null : null;
+  const homeAddress = owner?.id === ownerId ? owner.address?.trim() || voltlinesHome?.address?.trim() || "" : "";
   const missingVoltlines = pets.filter((p) => selectedPetIds.includes(p.id) && !p.voltlines_passenger_id);
   const slots = useTransportSlots();
   const createOwner = useCreateOwner();
@@ -243,7 +248,7 @@ export function RequestForm({
       paused_until: isPause ? pauseUntil : null,
       from_date: isMove ? moveFrom : null,
     };
-    const ownerHasPin = owner?.id === ownerId && owner?.pin_lat != null;
+    const ownerHasPin = homeLat != null && homeLng != null;
     const rows: Omit<TransportRequestInsert, "group_id">[] = [];
     for (const direction of directions) {
       const loc = locationByDirection[direction];
@@ -387,8 +392,11 @@ export function RequestForm({
               {owner?.id === ownerId && (
                 <div className="mt-1 space-y-0.5 text-xs">
                   <div className="flex flex-wrap items-center gap-2">
-                    <PinBadge lat={owner.pin_lat} lng={owner.pin_lng} />
-                    {owner.address?.trim() && <span className="text-muted-foreground">{owner.address.trim()}</span>}
+                    <PinBadge lat={homeLat} lng={homeLng} />
+                    {(owner.pin_source === "voltlines" || (owner.pin_lat == null && voltlinesHome)) && (
+                      <span className="text-muted-foreground">From Voltlines{voltlinesHome?.petName ? ` · ${voltlinesHome.petName}` : ""}</span>
+                    )}
+                    {homeAddress && <span className="text-muted-foreground">{homeAddress}</span>}
                   </div>
                   {owner.transport_notes?.trim() && (
                     <p>

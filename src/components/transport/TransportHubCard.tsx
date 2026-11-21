@@ -1,12 +1,14 @@
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTransportHubStatus, useTransportHubSync } from "@/hooks/useTransport";
+import { useVoltlinesDirectorySync } from "@/hooks/useVoltlines";
 import { Button } from "@/components/ui/button";
 
 /** Sends Woof's requests and regulars onto Admin Essentials Desk and Master. */
 export function TransportHubCard() {
   const status = useTransportHubStatus();
   const sync = useTransportHubSync();
+  const directory = useVoltlinesDirectorySync();
   const enabled = !!status.data?.enabled;
   const configured = !!status.data?.configured;
   const hubOn = status.data?.hub?.enabled === true;
@@ -22,27 +24,55 @@ export function TransportHubCard() {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2" data-testid="transport-hub-card">
       <p className="text-sm text-muted-foreground">{status.isLoading ? "Checking the transport hub…" : line}</p>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={!enabled || !configured || sync.isPending}
-        data-testid="transport-hub-sync"
-        onClick={() =>
-          sync.mutate(undefined, {
-            onSuccess: (res) => {
-              const skipped = res.notSent.length;
-              toast.success(
-                `Sent ${res.sent.dogs} dogs, ${res.sent.regulars} regulars, ${res.sent.dated} dated runs${skipped ? `. ${skipped} not sent` : ""}`,
-              );
-            },
-            onError: (err) => toast.error(err.message),
-          })
-        }
-      >
-        {sync.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-        Sync to Desk and Master
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!enabled || !configured || sync.isPending}
+          data-testid="transport-hub-sync"
+          onClick={() =>
+            sync.mutate(undefined, {
+              onSuccess: (res) => {
+                const skipped = res.notSent.length;
+                toast.success(
+                  `Sent ${res.sent.dogs} dogs, ${res.sent.regulars} regulars, ${res.sent.dated} dated runs${skipped ? `. ${skipped} not sent` : ""}`,
+                );
+              },
+              onError: (err) => toast.error(err.message),
+            })
+          }
+        >
+          {sync.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          Sync to Desk and Master
+        </Button>
+        {/* Woof's own copy of the Voltlines passenger list. It is what lets a client with
+            no pin borrow the one Voltlines already holds for their dog, and it is read
+            only — the account belongs to MSH dispatch, so an admin presses this, never a cron. */}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={directory.isPending}
+          data-testid="transport-voltlines-directory-sync"
+          onClick={() =>
+            directory.mutate(
+              {
+                onPage: (saved, total) =>
+                  toast.loading(`Read ${saved}${total ? ` of ${total}` : ""} passengers…`, { id: "voltlines-directory" }),
+              },
+              {
+                onSuccess: (res) =>
+                  toast.success(`Voltlines directory updated — ${res.saved} passengers`, { id: "voltlines-directory" }),
+                onError: (err) => toast.error(err.message, { id: "voltlines-directory" }),
+              },
+            )
+          }
+        >
+          {directory.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          Read Voltlines directory
+        </Button>
+      </div>
     </div>
   );
 }

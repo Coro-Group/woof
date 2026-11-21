@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { useCurrentStaffName as useSignedInStaff } from "@/hooks/useCurrentStaffName";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
+import { pinAreaLabel } from "@/lib/transportPin";
 import { SOURCE_LABEL, liveStops, mergeDemand, type BoardingStay, type DemandRow, type ScheduleStop } from "@/lib/transportSchedule";
 
 export type TransportRequest = Database["public"]["Tables"]["transport_request"]["Row"];
@@ -960,4 +962,82 @@ export async function storeFormOffers(
       if (upErr) throw upErr;
     }
   }
+}
+
+/**
+ * A client with no home pin, but a dog already on Voltlines: the van's pin is the one
+ * Voltlines has. Copy it onto the profile (and the address line, when Woof has none)
+ * so the request form stops saying the van has nowhere to go.
+ *
+ * It reads the local copy of the directory (voltlines_passenger_directory), never
+ * Voltlines itself — the account is MSH dispatch's. An admin refreshes that copy from
+ * Transport; until they have, this simply finds nothing.
+ */
+export function useAdoptVoltlinesHomePin(
+  owner: { id: string; pin_lat: number | null; pin_lng: number | null; address: string | null } | null | undefined,
+) {
+  const qc = useQueryClient();
+  const writing = useRef<string | null>(null);
+  const home = useQuery({
+    queryKey: ["transport", "voltlines-home", owner?.id ?? null],
+    enabled: !!owner?.id && owner.pin_lat == null,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data: pets, error } = await supabase
+        .from("pets")
+        .select("name, voltlines_passenger_id")
+        .eq("owner_id", owner!.id)
+        .not("voltlines_passenger_id", "is", null);
+      if (error) throw error;
+      const ids = (pets ?? []).map((p) => p.voltlines_passenger_id).filter((id): id is string => !!id);
+      if (!ids.length) return null;
+      const { data: rows, error: dirError } = await supabase
+        .from("voltlines_passenger_directory")
+        .select("passenger_id, address_line, lat, lng")
+        .in("passenger_id", ids);
+      if (dirError) throw dirError;
+      const hit = (rows ?? []).find((r) => r.lat != null && r.lng != null && pinAreaLabel(r.lat, r.lng));
+      if (!hit || hit.lat == null || hit.lng == null) return null;
+      return {
+        lat: hit.lat,
+        lng: hit.lng,
+        address: hit.address_line,
+        petName: (pets ?? []).find((p) => p.voltlines_passenger_id === hit.passenger_id)?.name ?? null,
+      };
+    },
+  });
+
+  useEffect(() => {
+    if (!home.error || !owner?.id || writing.current === `err:${owner.id}`) return;
+    writing.current = `err:${owner.id}`;
+    toast.error(home.error instanceof Error ? home.error.message : "Couldn't read the Voltlines home pin");
+  }, [home.error, owner?.id]);
+
+  useEffect(() => {
+    const row = home.data;
+    if (!owner?.id || owner.pin_lat != null || !row || writing.current === owner.id) return;
+    writing.current = owner.id;
+    void supabase
+      .from("owners")
+      .update({
+        pin_lat: row.lat,
+        pin_lng: row.lng,
+        pin_source: "voltlines",
+        pin_updated_at: new Date().toISOString(),
+        ...(owner.address?.trim() || !row.address ? {} : { address: row.address }),
+      })
+      .eq("id", owner.id)
+      .then(({ error }) => {
+        if (error) {
+          writing.current = null;
+          toast.error(error.message);
+          return;
+        }
+        toast.success(`Home pin taken from Voltlines${row.petName ? ` (${row.petName})` : ""}`);
+        qc.invalidateQueries({ queryKey: ["owners"] });
+        qc.invalidateQueries({ queryKey: ["transport"] });
+      });
+  }, [owner?.id, owner?.pin_lat, owner?.address, home.data, qc]);
+
+  return owner?.pin_lat == null ? home.data ?? null : null;
 }

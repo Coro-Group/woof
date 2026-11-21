@@ -53,3 +53,34 @@ export function useUnlinkVoltlinesPassenger() {
       }),
   });
 }
+
+/**
+ * Read the Voltlines passenger list into Woof's own copy, a few pages per call until
+ * the server stops handing back a `next`. Reads only; nothing is written to Voltlines.
+ *
+ * Admin or management only (the server checks). The account is MSH dispatch's, so this
+ * is always a person pressing a button — never a schedule — and `onPage` lets the
+ * caller show how far it has got on a long directory.
+ */
+export function useVoltlinesDirectorySync() {
+  return useMutation({
+    mutationFn: async (opts?: { onPage?: (saved: number, total: number | null) => void }) => {
+      let next: string | null = null;
+      let saved = 0;
+      let total: number | null = null;
+      // A guard, not a limit: a directory that never stops paging is a bug, not a big list.
+      for (let round = 0; round < 200; round += 1) {
+        const page: { saved: number; next: string | null; total: number | null } = await voltlinesApi(
+          "/api/transport-voltlines",
+          { method: "POST", body: JSON.stringify({ op: "directory_sync", ...(next ? { next } : {}) }) },
+        );
+        saved += page.saved;
+        total = page.total ?? total;
+        opts?.onPage?.(saved, total);
+        next = page.next;
+        if (!next) break;
+      }
+      return { saved, total, complete: !next };
+    },
+  });
+}

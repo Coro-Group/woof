@@ -13,6 +13,7 @@ import {
   useCurrentStaffName,
   useDecideTransportRequest,
   useOfferRequest,
+  useAdoptVoltlinesHomePin,
   useRequestOffers,
   useSameDayConflicts,
   useTransportHubStatus,
@@ -107,8 +108,9 @@ function DetailBody({
   const card = groupRequests(rows)[0];
   const lead = card.lead;
   const owner = lead.owners;
-  const homeLat = owner?.pin_lat ?? null;
-  const homeLng = owner?.pin_lng ?? null;
+  const voltlinesHome = useAdoptVoltlinesHomePin(owner);
+  const homeLat = owner?.pin_lat ?? voltlinesHome?.lat ?? null;
+  const homeLng = owner?.pin_lng ?? voltlinesHome?.lng ?? null;
   const open = isOpenStatus(card.status);
   const addition = card.kind === "one_off" || card.kind === "new_recurring";
   const ids = rows.map((r) => r.id);

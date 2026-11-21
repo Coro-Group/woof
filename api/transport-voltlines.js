@@ -6,6 +6,7 @@
 //   GET  ?passengers=<text>     live search, one GET
 //   POST { op: "link", petId, passengerId }
 //   POST { op: "unlink", petId }
+//   POST { op: "directory_sync", next? }   admin / management. Reads only.
 
 export const config = { maxDuration: 30 };
 
@@ -121,10 +122,84 @@ async function unlink(admin, { petId }) {
   return { message: `${pet.name} is no longer linked to a Voltlines passenger` };
 }
 
+/** AE's homeAddressOf: the passenger's default address, else its first live one. */
+function homeAddressOf(p) {
+  const list = (p?.addresses ?? []).filter((a) => !a.is_archived);
+  return (
+    list.find((a) => a.id === p?.default_address_id) ??
+    list.find((a) => a.is_default) ??
+    list.find((a) => a.coordinate?.latitude != null) ??
+    list[0] ??
+    null
+  );
+}
+
+/** A Voltlines "next" link back to a path our client can call. */
+const pagePath = (u) => String(u).replace(new RegExp("^https?://[^/]+/api/"), "");
+
+function directoryRow(p, now) {
+  const user = p?.profile?.user ?? {};
+  const home = homeAddressOf(p);
+  const branchAddress = p?.branch?.address ?? null;
+  const str = (v) => (v == null ? null : String(v));
+  return {
+    passenger_id: String(p.id),
+    first_name: clean(user.first_name) || null,
+    last_name: clean(user.last_name) || null,
+    full_name: clean(user.full_name) || clean([user.first_name, user.last_name].filter(Boolean).join(" ")) || null,
+    phone: clean(user.phone_number ?? p?.phone_number ?? p?.profile?.phone_number) || null,
+    status: str(p?.status),
+    branch_id: str(p?.branch?.id),
+    customer_id: str(p?.branch?.customer?.id ?? p?.branch?.customer_id ?? p?.branch?.customer),
+    home_address_id: str(home?.id),
+    address_line: clean(home?.address_line || home?.open_address || home?.title) || null,
+    lat: home?.coordinate?.latitude ?? null,
+    lng: home?.coordinate?.longitude ?? null,
+    branch_address_id: str(branchAddress?.id),
+    branch_address_line: clean(branchAddress?.address_line) || null,
+    raw_tags: Array.isArray(p?.tags) ? p.tags.map((t) => String(t?.name ?? t)) : null,
+    fetched_at: now,
+  };
+}
+
+/**
+ * One call reads as many directory pages as fit in ~20 s, gently (a pause between
+ * pages, Woof's own client name), and saves them. The caller repeats with the
+ * returned `next` until it is null. Reads only — nothing is written to Voltlines.
+ *
+ * The account is MSH dispatch's, so this stays a deliberate admin action and never
+ * runs on a schedule. It never touches calculate-route, so it spends none of AE's
+ * route budget.
+ */
+async function directorySync(admin, { next }, staff) {
+  if (!["admin", "management"].includes(staff.role)) {
+    throw new HttpError(403, "Only admin or management can read the whole directory");
+  }
+  let path = next ? pagePath(next) : "v3/passenger/?page_size=100";
+  if (!path.startsWith("v3/passenger/")) throw new HttpError(400, "Bad page");
+  const started = Date.now();
+  let saved = 0;
+  let total = null;
+  while (path && Date.now() - started < 20000) {
+    const page = await voltlinesGet(path);
+    total = typeof page?.count === "number" ? page.count : total;
+    const now = new Date().toISOString();
+    const rows = (page?.results ?? []).filter((p) => p?.id != null).map((p) => directoryRow(p, now));
+    if (rows.length) {
+      const { error } = await admin.from("voltlines_passenger_directory").upsert(rows, { onConflict: "passenger_id" });
+      if (error) throw new HttpError(500, error.message);
+      saved += rows.length;
+    }
+    path = page?.next ? pagePath(page.next) : null;
+    if (path) await new Promise((r) => setTimeout(r, 400));
+  }
+  return { saved, next: path, total };
+}
+
 export default async function handler(req, res) {
   try {
     const { url, anon, admin } = clients();
-    await staffOf(req, url, anon, admin);
+    const staff = await staffOf(req, url, anon, admin);
     if (req.method === "GET") {
       const q = req.query ?? {};
       if (q.status) return json(res, 200, { configured: voltlinesConfigured() });
@@ -136,6 +211,7 @@ export default async function handler(req, res) {
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
     if (body.op === "link") return json(res, 200, await link(admin, body));
     if (body.op === "unlink") return json(res, 200, await unlink(admin, body));
+    if (body.op === "directory_sync") return json(res, 200, await directorySync(admin, body, staff));
     return json(res, 400, { error: "Unknown op" });
   } catch (err) {
     return json(res, err.status || 500, { error: err.message, code: err.code ?? null });

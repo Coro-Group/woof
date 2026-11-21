@@ -4070,6 +4070,63 @@ export type Database = {
           },
         ]
       }
+      voltlines_passenger_directory: {
+        Row: {
+          passenger_id: string
+          first_name: string | null
+          last_name: string | null
+          full_name: string | null
+          phone: string | null
+          status: string | null
+          branch_id: string | null
+          customer_id: string | null
+          home_address_id: string | null
+          address_line: string | null
+          lat: number | null
+          lng: number | null
+          branch_address_id: string | null
+          branch_address_line: string | null
+          raw_tags: string[] | null
+          fetched_at: string
+        }
+        Insert: {
+          passenger_id: string
+          first_name?: string | null
+          last_name?: string | null
+          full_name?: string | null
+          phone?: string | null
+          status?: string | null
+          branch_id?: string | null
+          customer_id?: string | null
+          home_address_id?: string | null
+          address_line?: string | null
+          lat?: number | null
+          lng?: number | null
+          branch_address_id?: string | null
+          branch_address_line?: string | null
+          raw_tags?: string[] | null
+          fetched_at?: string | undefined
+        }
+        Update: {
+          passenger_id?: string
+          first_name?: string | null
+          last_name?: string | null
+          full_name?: string | null
+          phone?: string | null
+          status?: string | null
+          branch_id?: string | null
+          customer_id?: string | null
+          home_address_id?: string | null
+          address_line?: string | null
+          lat?: number | null
+          lng?: number | null
+          branch_address_id?: string | null
+          branch_address_line?: string | null
+          raw_tags?: string[] | null
+          fetched_at?: string
+        }
+        Relationships: []
+      }
       waiting_list: {
         Row: {
           created_at: string

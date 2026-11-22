@@ -54,7 +54,7 @@ function requireSwitchedOn() {
 }
 
 async function quote(db, body) {
-  const { petId, date, direction, startMin, location } = body ?? {};
+  const { petId, date, direction, startMin, location, kind } = body ?? {};
   if (!petId || !/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? ""))) throw new HttpError(422, "petId and date are required");
   if (direction !== "pickup" && direction !== "dropoff") throw new HttpError(422, "direction must be pickup or dropoff");
   if (!Number.isInteger(startMin)) throw new HttpError(422, "startMin is required (the hour asked for)");
@@ -63,7 +63,9 @@ async function quote(db, body) {
   if (!pet.voltlines_passenger_id) {
     throw new HttpError(409, "This dog is not on Voltlines yet — link the passenger on the request");
   }
-  return hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...(location ? { location } : {}) });
+  // new_recurring: AE quotes it against the Master base for the weekday of `date`.
+  const quoteKind = kind === "new_recurring" ? { kind: "new_recurring" } : {};
+  return hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...quoteKind, ...(location ? { location } : {}) });
 }
 
 async function sync(db) {

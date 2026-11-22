@@ -707,6 +707,8 @@ export function useTransportHubQuote() {
       direction: "pickup" | "dropoff";
       startMin: number;
       location?: { label: string; lat: number; lng: number };
+      /** new_recurring: quoted against the Master base for the weekday of `date`. */
+      kind?: "one_off" | "new_recurring";
     }) => hubApi<HubQuote>({ method: "POST", body: JSON.stringify({ op: "quote", ...input }) }),
   });
 }
@@ -784,6 +786,8 @@ export type OfferLeg = {
   direction: "pickup" | "dropoff";
   startMin: number;
   location?: { label: string; lat: number; lng: number };
+  /** new_recurring: `date` is the first day it runs, quoted against that weekday's Master base. */
+  kind?: "one_off" | "new_recurring";
 };
 
 /**
@@ -806,6 +810,7 @@ export function useOfferRequest() {
               direction: leg.direction,
               startMin: leg.startMin,
               ...(leg.location ? { location: leg.location } : {}),
+              ...(leg.kind === "new_recurring" ? { kind: "new_recurring" } : {}),
             }),
           });
           const { error: delErr } = await supabase
@@ -869,6 +874,7 @@ export function useAcceptRequestOffer() {
       declinedOfferIds,
       slots,
       actor,
+      kind,
     }: {
       requestId: string;
       direction: string;
@@ -876,8 +882,8 @@ export function useAcceptRequestOffer() {
       declinedOfferIds: string[];
       slots: TransportSlot[];
       actor: string;
+      kind?: string | null;
     }) => {
-      const now = new Date().toISOString();
       if (declinedOfferIds.length) {
         const { error } = await supabase
           .from("transport_request_offer")
@@ -890,18 +896,25 @@ export function useAcceptRequestOffer() {
         .update({ chosen_by_staff: true })
         .eq("id", offer.id);
       if (chosenErr) throw chosenErr;
+      // The promised hour becomes the trip's (or the regular's) time, then the request is
+      // approved the way Approve does it, so a new regular is created at that hour.
       const { error } = await supabase
         .from("transport_request")
-        .update({
-          ...promiseFields(offer, slots, direction),
-          status: "approved",
-          decided_by: actor,
-          decided_at: now,
-          updated_by: actor,
-        })
+        .update({ ...promiseFields(offer, slots, direction), updated_by: actor })
         .eq("id", requestId);
       if (error) throw error;
-      return { message: "Promise recorded. It is on the schedule and goes to the transport hub with the next sync." };
+      const { error: decideErr } = await supabase.rpc("transport_request_decide", {
+        p_request_ids: [requestId],
+        p_action: "approve",
+        p_actor: actor,
+      });
+      if (decideErr) throw decideErr;
+      return {
+        message:
+          kind === "new_recurring"
+            ? "Promise recorded and the regular approved. It is on the Master base within seconds."
+            : "Promise recorded. It is on the schedule and on the Master within seconds.",
+      };
     },
     onSuccess: () => {
       invalidate();
@@ -918,20 +931,19 @@ export function useBookByHand() {
   const invalidate = useInvalidateTransport();
   return useMutation({
     mutationFn: async ({ ids, reason, actor }: { ids: string[]; reason: string; actor: string }) => {
-      const now = new Date().toISOString();
       const { error } = await supabase
         .from("transport_request")
-        .update({
-          status: "approved",
-          decided_by: actor,
-          decided_at: now,
-          updated_by: actor,
-          needs_review: true,
-          review_reason: reason,
-        })
+        .update({ updated_by: actor, needs_review: true, review_reason: reason })
         .in("id", ids)
         .in("status", ["received", "offered"]);
       if (error) throw error;
+      // Approve the way Approve does it, so a new regular is created at the hour on the card.
+      const { error: decideErr } = await supabase.rpc("transport_request_decide", {
+        p_request_ids: ids,
+        p_action: "approve",
+        p_actor: actor,
+      });
+      if (decideErr) throw decideErr;
     },
     onSuccess: invalidate,
   });
@@ -947,7 +959,8 @@ export async function storeFormOffers(
   // index = the option accepted; null keeps the options with none chosen (an Offered request).
   accepted: Partial<Record<"pickup" | "dropoff", { quote: HubQuote; index?: number | null }>>,
   actor: string | null,
-) {
+): Promise<string[]> {
+  const chosenIds: string[] = [];
   const { data: saved, error } = await supabase.from("transport_request").select("id, direction").eq("group_id", groupId);
   if (error) throw error;
   for (const row of saved ?? []) {
@@ -961,8 +974,10 @@ export async function storeFormOffers(
     if (chosen) {
       const { error: upErr } = await supabase.from("transport_request").update({ accepted_offer_id: chosen.id }).eq("id", row.id);
       if (upErr) throw upErr;
+      chosenIds.push(row.id);
     }
   }
+  return chosenIds;
 }
 
 /**

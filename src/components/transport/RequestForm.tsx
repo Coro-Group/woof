@@ -14,6 +14,8 @@ import {
   storeFormOffers,
   type TransportRequestInsert,
 } from "@/hooks/useTransport";
+import { supabase } from "@/integrations/supabase/client";
+import { nextDateForWeekday } from "@/lib/transportRequests";
 import { isPetDeceased } from "@/lib/petDeceased";
 import { boardingClashes, dubaiToday } from "@/lib/transportSchedule";
 import { SHORT_DAYS, dayDate, nextDay, shortDate } from "@/lib/transportRequests";
@@ -135,6 +137,11 @@ export function RequestForm({
   const kind = isMove ? "change" : isPause ? "pause" : isCancellation ? "cancel" : isRegular ? "new_recurring" : "one_off";
   const pauseReady = !isPause || (!!pauseUntil && !!pauseFrom && pauseUntil >= pauseFrom);
   const datesChosen = isMove ? (moveTo ? [moveTo] : []) : [...new Set(serviceDates.filter(Boolean))].sort();
+  // A new regular for one weekday can be offered here: quoted on its first day, against that weekday's Master base.
+  const offerWeekly = kind === "new_recurring" && weekdays.length === 1;
+  const offerDate = offerWeekly ? nextDateForWeekday(Number(weekdays[0]), startDate && startDate > today ? startDate : today) : null;
+  // One trip per direction: an accepted or offered time belongs to it.
+  const singleLeg = (!isWeekly && datesChosen.length === 1) || offerWeekly;
   const moveReady = !isMove || (!!moveFrom && !!moveTo && moveFrom !== moveTo);
   const allowsLocation = !isCancellation && !isWeekly;
   // AE's same-day notice: an addition for a dog already on the vans that day and way.
@@ -151,7 +158,7 @@ export function RequestForm({
   useEffect(() => {
     setAcceptedByDirection({});
     setQuotedByDirection({});
-  }, [selectedPetIds.join(","), datesChosen.join(",")]);
+  }, [selectedPetIds.join(","), datesChosen.join(","), weekdays.join(","), startDate]);
   const locationsReady = !allowsLocation || directions.every((d) => locationReady(locationByDirection[d]));
   /*
    * A one-off a boarding stay would pause: the board strikes it, so no van comes (AE).
@@ -275,15 +282,16 @@ export function RequestForm({
        * person and the trip is approved, with the promise on the trip's note
        * ("Promised: 08-09AM — collected around 08:20").
        */
-      const offer = !isWeekly && datesChosen.length === 1 ? acceptedByDirection[direction] : undefined;
+      const offer = singleLeg ? acceptedByDirection[direction] : undefined;
       const slot = offer ? slotsFor(direction).find((s) => s.start_min === offer.startMin) ?? null : null;
       const etaMin = offer?.eta ? minutesOf(offer.eta) : null;
       const now = new Date().toISOString();
+      // A regular is approved after saving (transport_request_decide creates it), so it saves Offered.
       const promised = offer
         ? {
-            status: "approved" as const,
-            decided_by: who,
-            decided_at: now,
+            ...(offerWeekly
+              ? { status: "offered" as const }
+              : { status: "approved" as const, decided_by: who, decided_at: now }),
             offered_by: who,
             offered_at: now,
             promised_slot_id: slot?.id ?? null,
@@ -293,11 +301,13 @@ export function RequestForm({
           }
         : {};
       // Offered, not yet confirmed by the client: it waits in the Inbox with the times.
-      const quoted = !offer && !isWeekly && datesChosen.length === 1 ? quotedByDirection[direction] : undefined;
+      const quoted = !offer && singleLeg ? quotedByDirection[direction] : undefined;
       const offeredOnly =
         quoted && quoted.offers.length > 0 ? { status: "offered" as const, offered_by: who, offered_at: now } : {};
       if (isWeekly) {
-        for (const day of weekdays) rows.push({ ...base, ...legFields, weekday: Number(day), service_date: null });
+        for (const day of weekdays) {
+          rows.push({ ...base, ...legFields, ...(offerWeekly ? { ...promised, ...offeredOnly } : {}), weekday: Number(day), service_date: null });
+        }
       } else {
         for (const date of datesChosen) rows.push({ ...base, ...legFields, ...promised, ...offeredOnly, service_date: date, weekday: null });
       }
@@ -308,7 +318,7 @@ export function RequestForm({
         onSuccess: ({ groupId }) => {
           // The options and the chosen one, stored as an Inbox Offer / Accept stores them.
           const toStore: Partial<Record<Direction, { quote: AcceptedOffer["quote"]; index?: number | null }>> = {};
-          if (!isWeekly && datesChosen.length === 1) {
+          if (singleLeg) {
             for (const d of directions) {
               const accepted = acceptedByDirection[d];
               const quoted = quotedByDirection[d];
@@ -316,14 +326,25 @@ export function RequestForm({
               else if (quoted && quoted.offers.length > 0) toStore[d] = { quote: quoted, index: null };
             }
           }
+          const acceptedRegular = offerWeekly && Object.values(acceptedByDirection).some(Boolean);
           if (Object.keys(toStore).length) {
-            storeFormOffers(groupId, toStore, who).catch((e: Error) =>
-              toast.error(`Saved, but the offers were not stored: ${e.message}`),
-            );
+            storeFormOffers(groupId, toStore, who)
+              .then(async (chosenIds) => {
+                // An accepted regular: approve it now, which creates the regular at the promised hour.
+                if (!offerWeekly || !chosenIds.length) return;
+                const { error } = await supabase.rpc("transport_request_decide", {
+                  p_request_ids: chosenIds,
+                  p_action: "approve",
+                  p_actor: who ?? "Staff",
+                });
+                if (error) throw error;
+                toast.success("Promise recorded and the regular approved");
+              })
+              .catch((e: Error) => toast.error(`Saved, but the promise was not completed: ${e.message}`));
           }
           const allPromised = rows.length > 0 && rows.every((r) => r.status === "approved");
           const anyOffered = rows.some((r) => r.status === "offered");
-          toast.success(
+          if (!acceptedRegular) toast.success(
             allPromised
               ? "Promise recorded and approved"
               : anyOffered
@@ -710,10 +731,11 @@ export function RequestForm({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">Leave blank if they have not said. It saves without one.</p>
-              {!isMove && !isWeekly && !locationByDirection[o.value].enabled && (
+              {!isMove && (!isWeekly || offerWeekly) && !locationByDirection[o.value].enabled && (
                 <HubOfferTimes
+                  kind={offerWeekly ? "new_recurring" : "one_off"}
                   petId={selectedPetIds.length === 1 ? selectedPetIds[0] : null}
-                  date={datesChosen.length === 1 ? datesChosen[0] : null}
+                  date={offerWeekly ? offerDate : datesChosen.length === 1 ? datesChosen[0] : null}
                   direction={o.value}
                   askedStartMin={slotsFor(o.value).find((s) => s.id === slotByDirection[o.value])?.start_min ?? null}
                   accepted={acceptedByDirection[o.value] ?? null}

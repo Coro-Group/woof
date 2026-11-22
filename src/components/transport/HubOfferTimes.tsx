@@ -35,6 +35,7 @@ export function HubOfferTimes({
   accepted,
   onAccept,
   onQuoted,
+  kind = "one_off",
 }: {
   petId: string | null;
   date: string | null;
@@ -45,6 +46,8 @@ export function HubOfferTimes({
   onAccept: (offer: AcceptedOffer | null) => void;
   /** The times the hub offered (null when asked again), so saving can keep them. */
   onQuoted?: (quote: HubQuote | null) => void;
+  /** new_recurring: `date` is the first day it runs; quoted against that weekday's Master base. */
+  kind?: "one_off" | "new_recurring";
 }) {
   const status = useTransportHubStatus();
   const quote = useTransportHubQuote();
@@ -57,7 +60,7 @@ export function HubOfferTimes({
     onAccept(null);
     onQuoted?.(null);
     quote.mutate(
-      { petId, date, direction, startMin: askedStartMin, ...(location ? { location } : {}) },
+      { petId, date, direction, startMin: askedStartMin, kind, ...(location ? { location } : {}) },
       { onSuccess: (q) => onQuoted?.(q) },
     );
   };
@@ -67,7 +70,7 @@ export function HubOfferTimes({
       <div className="space-y-1" data-testid={`transport-hub-promise-${direction}`}>
         <PromiseBox slotLabel={accepted.slotLabel} eta={accepted.eta} />
         <p className="text-xs text-muted-foreground">
-          Saving records the promise against your name and approves this trip.{" "}
+          Saving records the promise against your name and approves this {kind === "new_recurring" ? "regular" : "trip"}.{" "}
           <button type="button" className="underline" onClick={() => onAccept(null)}>
             Choose again
           </button>

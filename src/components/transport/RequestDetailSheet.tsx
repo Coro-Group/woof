@@ -26,6 +26,7 @@ import {
   useUpdateTransportRequestRows,
   type TransportRequestWithDetails,
 } from "@/hooks/useTransport";
+import { nextDateForWeekday } from "@/lib/transportRequests";
 import { isPetDeceased } from "@/lib/petDeceased";
 import { dubaiToday } from "@/lib/transportSchedule";
 import {
@@ -205,12 +206,15 @@ function DetailBody({
   const noPin = addition && owner && homeLat == null && rows.every((r) => r.location_lat == null);
 
   /*
-   * AE's Offer / Accept / Book by hand, for dated additions while the hub link is on.
-   * Cancellations, pauses, moves, regulars and vet / branch-move legs still Approve.
+   * AE's Offer / Accept / Book by hand, for additions while the hub link is on: a dated
+   * one-off is quoted against its day, a new regular against the Master base for each
+   * weekday (its first date on or after the start). Cancellations, pauses, moves and vet /
+   * branch-move legs still Approve.
    */
   const hub = useTransportHubStatus();
   const hubOn = !!hub.data?.enabled && !!hub.data?.configured && hub.data?.hub?.enabled === true;
-  const offerable = hubOn && card.kind === "one_off" && (lead.purpose ?? "regular") === "regular";
+  const offerable =
+    hubOn && (card.kind === "one_off" || card.kind === "new_recurring") && (lead.purpose ?? "regular") === "regular";
   const offersQuery = useRequestOffers(ids);
   const offersByLeg = offersQuery.data ?? new Map<string, TransportRequestOffer[]>();
   const offerRequest = useOfferRequest();
@@ -240,11 +244,13 @@ function DetailBody({
 
   const runOffer = () => {
     const legs = openLegs
-      .filter((r) => r.service_date && r.requested_slot_id)
+      .filter((r) => (r.service_date || r.weekday != null) && r.requested_slot_id)
       .map((r) => ({
         requestId: r.id,
         petId: r.transport_request_pet[0]?.pet_id ?? petIds[0],
-        date: r.service_date as string,
+        // A regular is quoted on the first day it runs, against that weekday's Master base.
+        date: r.service_date ?? nextDateForWeekday(r.weekday as number, r.starts_on && r.starts_on > today ? r.starts_on : today),
+        kind: r.kind === "new_recurring" ? ("new_recurring" as const) : ("one_off" as const),
         direction: r.direction as "pickup" | "dropoff",
         startMin: slots.find((sl) => sl.id === r.requested_slot_id)?.start_min ?? 0,
         ...(r.location_text && r.location_lat != null && r.location_lng != null
@@ -792,6 +798,7 @@ function LegOffers({
                   declinedOfferIds: declined.filter((d) => d !== offer.id),
                   slots,
                   actor,
+                  kind: leg.kind,
                 },
                 {
                   onSuccess: (r) => toast.success(r.message),

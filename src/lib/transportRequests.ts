@@ -283,3 +283,13 @@ export const REJECT_REASONS = [
   "Wrong customer",
   "Already arranged themselves",
 ] as const;
+
+/** The first date on or after `fromIso` that falls on `weekday` (0 = Sunday): where a new regular is quoted. */
+export function nextDateForWeekday(weekday: number, fromIso: string): string {
+  const start = new Date(`${fromIso}T12:00:00Z`);
+  for (let i = 0; i < 7; i += 1) {
+    const day = new Date(start.getTime() + i * 86400000);
+    if (day.getUTCDay() === weekday) return day.toISOString().slice(0, 10);
+  }
+  return fromIso;
+}

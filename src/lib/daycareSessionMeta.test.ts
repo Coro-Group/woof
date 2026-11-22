@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   composeNotesWithBillingPath,
   composeNotesWithHourlyInvoiced,
+  isDuplicateHourlyInvoiceLine,
+  sessionNotesHaveHourlyInvoice,
   composeNotesWithHourlyDraft,
   isHourlyBillingInvoiced,
   isHourlyBillingDraft,
@@ -95,6 +97,30 @@ describe("daycareSessionMeta", () => {
     // Old draft marker should be gone; new one added
     expect(notes).not.toContain("HOURLY_DRAFT:old-id");
     expect(notes).toContain("HOURLY_DRAFT:new-id");
+  });
+
+  it("does not add a second hourly line once the session is invoiced or the line exists", () => {
+    const notes = "BILLING_PATH:hourly\nHOURLY_INVOICED:inv-12487";
+    expect(sessionNotesHaveHourlyInvoice(notes, "inv-12487")).toBe(true);
+    expect(sessionNotesHaveHourlyInvoice(notes, "other-invoice")).toBe(false);
+
+    const existing = [
+      {
+        description: "Daycare hourly — Mochi (5 hr)",
+        quantity: 5,
+        pricingKey: "daycare_hourly",
+      },
+    ];
+    const again = {
+      description: "Daycare hourly — Mochi (5 hr)",
+      quantity: 5,
+      pricingKey: "daycare_hourly",
+    };
+    expect(isDuplicateHourlyInvoiceLine(existing, again)).toBe(true);
+    expect(
+      isDuplicateHourlyInvoiceLine(existing, { ...again, quantity: 4 }),
+    ).toBe(false);
+    expect(isDuplicateHourlyInvoiceLine([], again)).toBe(false);
   });
 
   it("upgradeHourlyDraftToInvoiced replaces HOURLY_DRAFT with HOURLY_INVOICED", () => {

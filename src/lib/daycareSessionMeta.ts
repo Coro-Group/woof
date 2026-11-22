@@ -243,6 +243,40 @@ export function clearHourlyDraftFromNotes(
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
+export type HourlyInvoiceLineIdentity = {
+  description: string;
+  quantity: number;
+  pricingKey: string | null;
+};
+
+/** True when this session was already finalised onto this invoice. */
+export function sessionNotesHaveHourlyInvoice(
+  notes: string | null | undefined,
+  invoiceId: string,
+): boolean {
+  return parseHourlyInvoicedId(notes) === invoiceId;
+}
+
+/**
+ * Drop a candidate hourly line when the same invoice already has that
+ * description, pricing key, and quantity. A second check-out must not add it again.
+ */
+export function isDuplicateHourlyInvoiceLine(
+  existing: ReadonlyArray<{
+    description?: string | null;
+    quantity?: number | string | null;
+    pricingKey?: string | null;
+  }>,
+  candidate: HourlyInvoiceLineIdentity,
+): boolean {
+  return existing.some(
+    (line) =>
+      (line.pricingKey ?? null) === (candidate.pricingKey ?? null) &&
+      (line.description ?? "") === candidate.description &&
+      Number(line.quantity) === Number(candidate.quantity),
+  );
+}
+
 /**
  * Replace HOURLY_DRAFT:{invoiceId} with HOURLY_INVOICED:{invoiceId} in a session's notes.
  * Used when the draft invoice is finalised.

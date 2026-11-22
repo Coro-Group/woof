@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -18,7 +18,10 @@ import { createServiceInvoice, removeUnpaidServiceInvoice } from "@/lib/bookingU
 import { invoiceDueDateAtCheckIn, invoiceDueDateToday } from "@/lib/invoiceDueDate";
 import {
   composeNotesWithHourlyInvoiced,
+  isDuplicateHourlyInvoiceLine,
   parseHourlyDraftId,
+  parseHourlyInvoicedId,
+  sessionNotesHaveHourlyInvoice,
   upgradeHourlyDraftToInvoiced,
 } from "@/lib/daycareSessionMeta";
 import { HOURLY_PLACEHOLDER_SERVICE_TYPE } from "@/lib/daycareHourlyDraftInvoice";
@@ -71,6 +74,7 @@ export function CompleteHourlyBillingDialog({
   const [hoursByPetId, setHoursByPetId] = useState<Record<string, string>>({});
   const [skipInvoiceDiscount, setSkipInvoiceDiscount] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLock = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -179,10 +183,13 @@ export function CompleteHourlyBillingDialog({
   };
 
   const handleGenerateInvoice = async () => {
+    if (submitLock.current || isSubmitting) return;
     if (!canSubmit || sessions.length === 0) {
       toast.error("Enter billable hours for each dog");
       return;
     }
+    submitLock.current = true;
+    setIsSubmitting(true);
 
     // Resolve the owner's profile discount once for use in both paths below.
     let ownerDiscountPct = 0;
@@ -213,10 +220,10 @@ export function CompleteHourlyBillingDialog({
 
     if (hourLineItems.length === 0) {
       toast.error("Enter billable hours for each dog");
+      submitLock.current = false;
+      setIsSubmitting(false);
       return;
     }
-
-    setIsSubmitting(true);
 
     const { data: sessionDateRows, error: sessionDateErr } = await supabase
       .from("daycare_sessions")
@@ -227,6 +234,7 @@ export function CompleteHourlyBillingDialog({
       );
     if (sessionDateErr) {
       toast.error(sessionDateErr.message);
+      submitLock.current = false;
       setIsSubmitting(false);
       return;
     }
@@ -241,6 +249,24 @@ export function CompleteHourlyBillingDialog({
     if (draftInvoiceId) {
       // ── Update-draft path ────────────────────────────────────────────────
       try {
+        const { data: freshSessions, error: freshErr } = await supabase
+          .from("daycare_sessions")
+          .select("id, notes")
+          .in(
+            "id",
+            sessions.map((s) => s.id),
+          );
+        if (freshErr) throw freshErr;
+
+        const alreadyInvoiced = (freshSessions ?? []).some((session) =>
+          sessionNotesHaveHourlyInvoice(session.notes, draftInvoiceId),
+        );
+        if (alreadyInvoiced) {
+          toast.success("Hourly daycare invoice ready for payment");
+          await openPaymentForInvoice(draftInvoiceId);
+          return;
+        }
+
         // 1. Remove placeholder lines (auto-generated at check-in).
         const { error: delErr } = await supabase
           .from("invoice_line_items")
@@ -252,24 +278,38 @@ export function CompleteHourlyBillingDialog({
         // 2. Determine sort_order for new lines (append after existing kept lines).
         const { data: existingLines } = await supabase
           .from("invoice_line_items")
-          .select("sort_order")
+          .select("sort_order, description, quantity, pricing_key")
           .eq("invoice_id", draftInvoiceId)
-          .order("sort_order", { ascending: false })
-          .limit(1);
+          .order("sort_order", { ascending: false });
         const maxSort = existingLines?.[0]?.sort_order ?? -1;
 
-        // 3. Insert real hour-based lines.
-        const insertRows = hourLineItems.map((li, i) => ({
-          invoice_id: draftInvoiceId,
-          description: li.description,
-          quantity: li.quantity,
-          unit_price: li.unitPrice,
-          total_price: li.unitPrice * li.quantity,
-          line_total: li.unitPrice * li.quantity,
-          pricing_key: li.pricingKey ?? null,
-          service_type: li.serviceType,
-          sort_order: (maxSort ?? -1) + 1 + i,
+        const existingIdentities = (existingLines ?? []).map((line) => ({
+          description: line.description,
+          quantity: line.quantity,
+          pricingKey: line.pricing_key,
         }));
+
+        // 3. Insert real hour-based lines that are not already on this invoice.
+        const insertRows = hourLineItems
+          .filter(
+            (li) =>
+              !isDuplicateHourlyInvoiceLine(existingIdentities, {
+                description: li.description,
+                quantity: li.quantity,
+                pricingKey: li.pricingKey ?? null,
+              }),
+          )
+          .map((li, i) => ({
+            invoice_id: draftInvoiceId,
+            description: li.description,
+            quantity: li.quantity,
+            unit_price: li.unitPrice,
+            total_price: li.unitPrice * li.quantity,
+            line_total: li.unitPrice * li.quantity,
+            pricing_key: li.pricingKey ?? null,
+            service_type: li.serviceType,
+            sort_order: (maxSort ?? -1) + 1 + i,
+          }));
 
         if (insertRows.length > 0) {
           const { error: insErr } = await supabase.from("invoice_line_items").insert(insertRows);
@@ -347,6 +387,7 @@ export function CompleteHourlyBillingDialog({
         const message = error instanceof Error ? error.message : "Could not generate invoice";
         toast.error(message);
       } finally {
+        submitLock.current = false;
         setIsSubmitting(false);
       }
       return;
@@ -355,6 +396,23 @@ export function CompleteHourlyBillingDialog({
     // ── Legacy create path (no draft exists) ────────────────────────────────
     let invoiceId: string | null = null;
     try {
+      const { data: freshSessions, error: freshErr } = await supabase
+        .from("daycare_sessions")
+        .select("notes")
+        .in(
+          "id",
+          sessions.map((s) => s.id),
+        );
+      if (freshErr) throw freshErr;
+      const alreadyInvoicedId = (freshSessions ?? [])
+        .map((session) => parseHourlyInvoicedId(session.notes))
+        .find((id): id is string => Boolean(id));
+      if (alreadyInvoicedId) {
+        toast.success("Hourly daycare invoice ready for payment");
+        await openPaymentForInvoice(alreadyInvoicedId);
+        return;
+      }
+
       invoiceId = await createServiceInvoice({
         ownerId,
         serviceType: "daycare",
@@ -407,6 +465,7 @@ export function CompleteHourlyBillingDialog({
       const message = error instanceof Error ? error.message : "Could not generate invoice";
       toast.error(message);
     } finally {
+      submitLock.current = false;
       setIsSubmitting(false);
     }
   };

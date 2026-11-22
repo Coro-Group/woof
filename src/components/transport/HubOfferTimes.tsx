@@ -22,7 +22,9 @@ export function offerShiftText(o: Pick<HubOffer, "shiftHours" | "outsideWindows"
  * Offer on the new-request form — AE's Offer, before the request exists: the hub quotes
  * the hour asked for and the hours either side, shown as AE's OfferList. Accept fills
  * the time; saving stores the options and records the promise, exactly as Accept does
- * on an Inbox request. Hidden while the hub link is switched off.
+ * on an Inbox request. Saving before the client has chosen keeps the request Offered in
+ * the Inbox with these times, to accept there once they confirm. Hidden while the hub
+ * link is switched off.
  */
 export function HubOfferTimes({
   petId,
@@ -32,6 +34,7 @@ export function HubOfferTimes({
   location,
   accepted,
   onAccept,
+  onQuoted,
 }: {
   petId: string | null;
   date: string | null;
@@ -40,6 +43,8 @@ export function HubOfferTimes({
   location?: { label: string; lat: number; lng: number } | null;
   accepted: AcceptedOffer | null;
   onAccept: (offer: AcceptedOffer | null) => void;
+  /** The times the hub offered (null when asked again), so saving can keep them. */
+  onQuoted?: (quote: HubQuote | null) => void;
 }) {
   const status = useTransportHubStatus();
   const quote = useTransportHubQuote();
@@ -50,7 +55,11 @@ export function HubOfferTimes({
   const ask = () => {
     if (!petId || !date || askedStartMin == null) return;
     onAccept(null);
-    quote.mutate({ petId, date, direction, startMin: askedStartMin, ...(location ? { location } : {}) });
+    onQuoted?.(null);
+    quote.mutate(
+      { petId, date, direction, startMin: askedStartMin, ...(location ? { location } : {}) },
+      { onSuccess: (q) => onQuoted?.(q) },
+    );
   };
 
   if (accepted) {
@@ -96,7 +105,8 @@ export function HubOfferTimes({
             emptyText="No existing run can take them. The transport team will look at this one."
           />
           <p className="text-xs text-muted-foreground">
-            {VOLTLINES_QUOTE_NOTE} Accepting records the promise against your name.
+            {VOLTLINES_QUOTE_NOTE} Accepting records the promise against your name. Waiting for the client? Save
+            without accepting: the request stays in the Inbox as Offered, with these times.
           </p>
         </div>
       )}

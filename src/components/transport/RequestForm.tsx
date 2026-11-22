@@ -76,6 +76,8 @@ export function RequestForm({
   const [slotByDirection, setSlotByDirection] = useState<Partial<Record<Direction, string>>>({});
   // An offer from the transport hub a person accepted (AE OfferList "Accept"), per way.
   const [acceptedByDirection, setAcceptedByDirection] = useState<Partial<Record<Direction, AcceptedOffer>>>({});
+  // Times the hub offered that nobody accepted yet: saved, the request waits in the Inbox as Offered.
+  const [quotedByDirection, setQuotedByDirection] = useState<Partial<Record<Direction, AcceptedOffer["quote"]>>>({});
   const [locationByDirection, setLocationByDirection] = useState<Record<Direction, LocationDraft>>({
     pickup: emptyLocation(),
     dropoff: emptyLocation(),
@@ -146,7 +148,10 @@ export function RequestForm({
   // A new clash needs its own say-so.
   useEffect(() => setAcceptConflicts(false), [conflicts.length]);
   // An accepted offer was for one dog on one day: a different dog or day starts over.
-  useEffect(() => setAcceptedByDirection({}), [selectedPetIds.join(","), datesChosen.join(",")]);
+  useEffect(() => {
+    setAcceptedByDirection({});
+    setQuotedByDirection({});
+  }, [selectedPetIds.join(","), datesChosen.join(",")]);
   const locationsReady = !allowsLocation || directions.every((d) => locationReady(locationByDirection[d]));
   /*
    * A one-off a boarding stay would pause: the board strikes it, so no van comes (AE).
@@ -178,6 +183,7 @@ export function RequestForm({
     setPauseUntil("");
     setSlotByDirection({});
     setAcceptedByDirection({});
+    setQuotedByDirection({});
     setLocationByDirection({ pickup: emptyLocation(), dropoff: emptyLocation() });
     setNotes("");
     setOwnerSearch("");
@@ -286,10 +292,14 @@ export function RequestForm({
             promised_eta_min: etaMin,
           }
         : {};
+      // Offered, not yet confirmed by the client: it waits in the Inbox with the times.
+      const quoted = !offer && !isWeekly && datesChosen.length === 1 ? quotedByDirection[direction] : undefined;
+      const offeredOnly =
+        quoted && quoted.offers.length > 0 ? { status: "offered" as const, offered_by: who, offered_at: now } : {};
       if (isWeekly) {
         for (const day of weekdays) rows.push({ ...base, ...legFields, weekday: Number(day), service_date: null });
       } else {
-        for (const date of datesChosen) rows.push({ ...base, ...legFields, ...promised, service_date: date, weekday: null });
+        for (const date of datesChosen) rows.push({ ...base, ...legFields, ...promised, ...offeredOnly, service_date: date, weekday: null });
       }
     }
     record.mutate(
@@ -297,18 +307,27 @@ export function RequestForm({
       {
         onSuccess: ({ groupId }) => {
           // The options and the chosen one, stored as an Inbox Offer / Accept stores them.
-          const toStore = Object.fromEntries(
-            Object.entries(acceptedByDirection).filter(([, o]) => !!o && !isWeekly && datesChosen.length === 1),
-          ) as Partial<Record<Direction, AcceptedOffer>>;
+          const toStore: Partial<Record<Direction, { quote: AcceptedOffer["quote"]; index?: number | null }>> = {};
+          if (!isWeekly && datesChosen.length === 1) {
+            for (const d of directions) {
+              const accepted = acceptedByDirection[d];
+              const quoted = quotedByDirection[d];
+              if (accepted) toStore[d] = accepted;
+              else if (quoted && quoted.offers.length > 0) toStore[d] = { quote: quoted, index: null };
+            }
+          }
           if (Object.keys(toStore).length) {
             storeFormOffers(groupId, toStore, who).catch((e: Error) =>
               toast.error(`Saved, but the offers were not stored: ${e.message}`),
             );
           }
           const allPromised = rows.length > 0 && rows.every((r) => r.status === "approved");
+          const anyOffered = rows.some((r) => r.status === "offered");
           toast.success(
             allPromised
               ? "Promise recorded and approved"
+              : anyOffered
+              ? "Offered — it waits in the Inbox until the client confirms a time"
               : isMove
               ? "Move recorded — approve it from the Inbox"
               : isCancellation
@@ -698,6 +717,7 @@ export function RequestForm({
                   direction={o.value}
                   askedStartMin={slotsFor(o.value).find((s) => s.id === slotByDirection[o.value])?.start_min ?? null}
                   accepted={acceptedByDirection[o.value] ?? null}
+                  onQuoted={(q) => setQuotedByDirection((prev) => ({ ...prev, [o.value]: q ?? undefined }))}
                   onAccept={(offer) => {
                     setAcceptedByDirection((prev) => ({ ...prev, [o.value]: offer ?? undefined }));
                     const slot = offer ? slotsFor(o.value).find((s) => s.start_min === offer.startMin) : null;

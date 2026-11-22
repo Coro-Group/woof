@@ -944,7 +944,8 @@ export function useBookByHand() {
  */
 export async function storeFormOffers(
   groupId: string,
-  accepted: Partial<Record<"pickup" | "dropoff", { quote: HubQuote; index: number }>>,
+  // index = the option accepted; null keeps the options with none chosen (an Offered request).
+  accepted: Partial<Record<"pickup" | "dropoff", { quote: HubQuote; index?: number | null }>>,
   actor: string | null,
 ) {
   const { data: saved, error } = await supabase.from("transport_request").select("id, direction").eq("group_id", groupId);
@@ -952,11 +953,11 @@ export async function storeFormOffers(
   for (const row of saved ?? []) {
     const choice = accepted[row.direction as "pickup" | "dropoff"];
     if (!choice) continue;
-    const rows = offerRowsOf(row.id, choice.quote, actor).map((o, i) => ({ ...o, chosen_by_staff: i === choice.index }));
+    const rows = offerRowsOf(row.id, choice.quote, actor).map((o, i) => ({ ...o, chosen_by_staff: choice.index != null && i === choice.index }));
     if (!rows.length) continue;
     const { data: inserted, error: insErr } = await supabase.from("transport_request_offer").insert(rows).select("id, rank");
     if (insErr) throw insErr;
-    const chosen = (inserted ?? []).find((o) => o.rank === choice.index + 1);
+    const chosen = choice.index != null ? (inserted ?? []).find((o) => o.rank === choice.index! + 1) : undefined;
     if (chosen) {
       const { error: upErr } = await supabase.from("transport_request").update({ accepted_offer_id: chosen.id }).eq("id", row.id);
       if (upErr) throw upErr;

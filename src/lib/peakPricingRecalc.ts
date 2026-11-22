@@ -186,6 +186,9 @@ type Priced = Candidate & {
 };
 
 async function priceCandidate(candidate: Candidate): Promise<Priced | null> {
+  const existingNights = candidate.lines.filter((line) => isBoardingNightLineItem(line));
+  if (existingNights.length === 0) return null;
+
   const nightLines = await buildBoardingNightLineItems({
     roomId: candidate.roomId,
     roomName: candidate.roomName,
@@ -206,8 +209,11 @@ async function priceCandidate(candidate: Candidate): Promise<Priced | null> {
     unitPrice: line.unitPrice,
     pricingKey: line.pricingKey ?? null,
   }));
-  const existingNights = candidate.lines.filter((line) => isBoardingNightLineItem(line));
   const preserved = candidate.lines.filter((line) => !isBoardingNightLineItem(line));
+  const previousNightSubtotal = lineSubtotal(
+    existingNights.map((line) => ({ quantity: line.quantity, unitPrice: line.unit_price })),
+  );
+  const nextNightSubtotal = lineSubtotal(nextLines);
   const nextSubtotal = lineSubtotal([
     ...nextLines,
     ...preserved.map((line) => ({ quantity: line.quantity, unitPrice: line.unit_price })),
@@ -219,6 +225,8 @@ async function priceCandidate(candidate: Candidate): Promise<Priced | null> {
     oldTotal: candidate.oldTotal,
     previousSubtotal: candidate.previousSubtotal,
     nextSubtotal,
+    previousNightSubtotal,
+    nextNightSubtotal,
     discountPct: candidate.discountPct,
     discountAmount: candidate.discountAmount,
     adjustments: candidate.adjustments,
@@ -290,10 +298,9 @@ async function applyCandidate(priced: Priced, actor: StaffActor): Promise<boolea
 
 async function replaceNightLines(priced: Priced): Promise<void> {
   const nightIds = priced.lines.filter((line) => isBoardingNightLineItem(line)).map((line) => line.id);
-  if (nightIds.length > 0) {
-    const { error } = await getSupabase().from("invoice_line_items").delete().in("id", nightIds);
-    if (error) throw error;
-  }
+  if (nightIds.length === 0) return;
+  const { error: deleteError } = await getSupabase().from("invoice_line_items").delete().in("id", nightIds);
+  if (deleteError) throw deleteError;
   const rows = priced.nextLines.map((line, index) => {
     const quantity = Math.max(1, line.quantity);
     return {

@@ -150,6 +150,56 @@ describe("peak pricing recalculation", () => {
     expect(money.walletCredit).toBe(0);
   });
 
+  it("INV-2026-12505 applies 15% to boarding nights only, not transport", () => {
+    const money = peakRecalcMoney({
+      status: "draft",
+      amountPaid: 0,
+      oldTotal: 2014.75,
+      previousSubtotal: 2337.4,
+      nextSubtotal: 2313.4,
+      previousNightSubtotal: 2151,
+      nextNightSubtotal: 2127,
+      discountPct: 0,
+      discountAmount: 322.65,
+      adjustments: [
+        {
+          adjustment_type: "double_occupancy_discount",
+          adjusted_amount: -322.65,
+          reason: "Double occupancy 15% discount (2 pets sharing room)",
+          approved_by: "system",
+        },
+      ],
+    });
+    expect(money.newDiscount).toBe(319.05);
+    expect(money.newTotal).toBe(1994.35);
+    expect(money.difference).toBe(-20.4);
+  });
+
+  it("INV-2026-10201 keeps 334.95 when 10% does not match the night or invoice base", () => {
+    const money = peakRecalcMoney({
+      status: "partially_paid",
+      amountPaid: 1500,
+      oldTotal: 3524.55,
+      previousSubtotal: 3859.5,
+      nextSubtotal: 3859.5,
+      previousNightSubtotal: 3859.5,
+      nextNightSubtotal: 3859.5,
+      discountPct: 8.68,
+      discountAmount: 334.95,
+      adjustments: [
+        {
+          adjustment_type: "discount_override",
+          adjusted_amount: 334.95,
+          reason: "Long stay-10% on non peak period.",
+          approved_by: "Lourdes",
+        },
+      ],
+    });
+    expect(money.newDiscount).toBe(334.95);
+    expect(money.difference).toBe(0);
+    expect(money.adjustmentAmounts).toEqual([]);
+  });
+
   it("reads a logged wallet credit back from the amendment reason", () => {
     expect(
       walletCreditInAmendmentReason(

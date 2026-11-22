@@ -148,7 +148,8 @@ function RecalculatePeakPricingDialog({
               {preview.unchanged > 0 ? ` ${preview.unchanged} already match the current peak dates.` : ""}
               {" "}Payment rows stay as they are. A paid invoice with a lower total stays paid, and the
               difference is credited to the wallet. A higher total is left outstanding. A percent
-              discount is recalculated on the new subtotal. A fixed discount stays as it is.
+              discount is recalculated only on the base it originally used. A discount that does not
+              match that base stays as it is.
             </p>
             {preview.rows.length === 0 ? (
               <p className="py-6 text-sm text-muted-foreground">No invoices need a change.</p>

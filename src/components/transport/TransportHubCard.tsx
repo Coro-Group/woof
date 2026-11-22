@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useTransportHubStatus, useTransportHubSync } from "@/hooks/useTransport";
 import { useVoltlinesDirectorySync } from "@/hooks/useVoltlines";
 import { Button } from "@/components/ui/button";
+import { HubAutoSyncLine } from "@/components/transport/HubAutoSyncLine";
 
 /** Sends Woof's requests and regulars onto Admin Essentials Desk and Master. */
 export function TransportHubCard() {
@@ -18,12 +19,15 @@ export function TransportHubCard() {
     : !enabled
       ? "The link to Admin Essentials is switched off. Desk and Master stay with the dispatch team."
       : hubOn
-        ? "Connected. Sync sends the next 8 weeks onto Desk and Master. Dispatch plans the vans there."
+        ? "Connected. Every accepted change goes onto Desk and Master within seconds; Sync re-sends the next 8 weeks. Dispatch plans the vans there."
         : `Admin Essentials is not accepting partners yet${status.data?.hub?.error ? `: ${status.data.hub.error}` : "."}`;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2" data-testid="transport-hub-card">
-      <p className="text-sm text-muted-foreground">{status.isLoading ? "Checking the transport hub…" : line}</p>
+      <div className="flex flex-col gap-0.5">
+        <p className="text-sm text-muted-foreground">{status.isLoading ? "Checking the transport hub…" : line}</p>
+        {enabled && configured && hubOn && <HubAutoSyncLine />}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"

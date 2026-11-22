@@ -6,7 +6,7 @@
 //
 // Refused unless TRANSPORT_HUB_ENABLED is exactly "true" and the AE URL and secret are set.
 
-export const config = { maxDuration: 120 };
+export const config = { maxDuration: 300 };
 
 import { createClient } from "@supabase/supabase-js";
 import { SYNC_DAYS, addDays, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
@@ -116,6 +116,57 @@ async function sync(db) {
   };
 }
 
+/** Service-role client for the automatic sync (no user session). */
+function serviceDb() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new HttpError(500, "Missing Supabase service env vars");
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+const AUTO_MAX_RUNS = 4;
+
+/**
+ * The database-kicked sync. Claims the one autosync row (so two never overlap and an
+ * older picture never lands after a newer one), syncs, reports, and goes again while
+ * changes keep arriving (at most AUTO_MAX_RUNS times; the cron picks up the rest).
+ */
+async function autoSync(token) {
+  if (typeof token !== "string" || token.length < 32) throw new HttpError(401, "Not authorised");
+  requireSwitchedOn();
+  const db = serviceDb();
+  const { data: claim, error: cErr } = await db.rpc("transport_hub_autosync_claim", { p_token: token });
+  if (cErr) throw new HttpError(500, cErr.message);
+  if (!claim?.ok) {
+    if (claim?.reason === "bad token") throw new HttpError(401, "Not authorised");
+    return { ok: true, skipped: claim?.reason ?? "busy" };
+  }
+  let generation = claim.generation;
+  const runs = [];
+  for (let i = 1; i <= AUTO_MAX_RUNS; i += 1) {
+    let summary = null;
+    let failure = null;
+    try {
+      const r = await sync(db);
+      summary = { range: r.range, sent: r.sent, hub: r.hub, notSent: r.notSent.length, generation };
+    } catch (err) {
+      failure = String(err?.message ?? err).slice(0, 1000);
+    }
+    const { data: fin, error: fErr } = await db.rpc("transport_hub_autosync_finish", {
+      p_token: token,
+      p_generation: generation,
+      p_result: summary,
+      p_error: failure,
+      p_continue: i < AUTO_MAX_RUNS,
+    });
+    runs.push(summary ?? { error: failure });
+    if (fErr) throw new HttpError(500, fErr.message);
+    if (failure || !fin?.again) break;
+    generation = fin.generation;
+  }
+  return { ok: true, runs };
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
@@ -127,9 +178,10 @@ export default async function handler(req, res) {
       return json(res, 200, { enabled, configured, hub });
     }
     if (req.method !== "POST") return json(res, 405, { error: "GET or POST only" });
+    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
+    if (body.op === "auto") return json(res, 200, await autoSync(body.token));
     const { db, staff } = await caller(req);
     requireSwitchedOn();
-    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
     if (body.op === "quote") return json(res, 200, await quote(db, body));
     if (body.op === "sync") {
       if (!["admin", "management"].includes(staff.role)) throw new HttpError(403, "Only admin or management can sync with the hub");

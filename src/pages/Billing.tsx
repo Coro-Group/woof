@@ -35,6 +35,7 @@ import {
 } from "@/lib/paymentMethod";
 import { StaffNameSelect } from "@/components/staff/StaffNameSelect";
 import { ConsolidateInvoicesDialog } from "@/components/billing/ConsolidateInvoicesDialog";
+import { RecalculatePeakPricingButton } from "@/components/billing/RecalculatePeakPricingDialog";
 import { WalletBalanceDisplay, OutstandingAmountBadge } from "@/components/billing/WalletBalanceDisplay";
 import { PaymentSplitDialog } from "@/components/billing/PaymentSplitDialog";
 import { WalletCreditExternalPaymentDialog } from "@/components/billing/WalletCreditExternalPaymentDialog";
@@ -1170,6 +1171,7 @@ function InvoicesTab({ ownerId, ownerName }: { ownerId: string; ownerName: strin
 // ── Main page ────────────────────────────────────────────────────────────────
 
 const BillingPage = () => {
+  const { staff } = useCurrentStaffName();
   const [selectedOwnerId, setSelectedOwnerId] = useState<string | null>(null);
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"wallet" | "invoices" | "pricing" | "deletion-log">("wallet");
@@ -1187,9 +1189,12 @@ const BillingPage = () => {
     <>
       <TopBar title="Billing & Wallets" />
       <main className="flex-1 overflow-auto p-8 space-y-6">
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Select Owner</p>
-          <OwnerSearchBar onSelect={handleSelect} selectedLabel={selectedLabel} selectedOwnerId={selectedOwnerId} onClear={handleClear} />
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-[240px] flex-1 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Select Owner</p>
+            <OwnerSearchBar onSelect={handleSelect} selectedLabel={selectedLabel} selectedOwnerId={selectedOwnerId} onClear={handleClear} />
+          </div>
+          {staff?.role === "admin" ? <RecalculatePeakPricingButton /> : null}
         </div>
 
         {!selectedOwnerId ? (

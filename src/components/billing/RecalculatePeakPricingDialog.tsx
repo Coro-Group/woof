@@ -125,7 +125,7 @@ function RecalculatePeakPricingDialog({
         }
       }}
     >
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle>Recalculate peak pricing</DialogTitle>
           <DialogDescription>
@@ -146,8 +146,9 @@ function RecalculatePeakPricingDialog({
             <p className="text-sm text-muted-foreground">
               {preview.rows.length} invoice{preview.rows.length === 1 ? "" : "s"} will change.
               {preview.unchanged > 0 ? ` ${preview.unchanged} already match the current peak dates.` : ""}
-              {" "}Paid invoices with a lower total get that difference credited to the wallet. A higher
-              total is left outstanding.
+              {" "}Payment rows stay as they are. A paid invoice with a lower total stays paid, and the
+              difference is credited to the wallet. A higher total is left outstanding. A percent
+              discount is recalculated on the new subtotal. A fixed discount stays as it is.
             </p>
             {preview.rows.length === 0 ? (
               <p className="py-6 text-sm text-muted-foreground">No invoices need a change.</p>
@@ -162,6 +163,8 @@ function RecalculatePeakPricingDialog({
                       <TableHead className="text-right">Old total</TableHead>
                       <TableHead className="text-right">New total</TableHead>
                       <TableHead className="text-right">Difference</TableHead>
+                      <TableHead className="text-right">Old discount</TableHead>
+                      <TableHead className="text-right">New discount</TableHead>
                       <TableHead className="text-right">Wallet credit</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -174,6 +177,8 @@ function RecalculatePeakPricingDialog({
                         <TableCell className="text-right tabular-nums">{formatWalletAed(row.oldTotal)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatWalletAed(row.newTotal)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatSigned(row.difference)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatWalletAed(row.oldDiscount)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatWalletAed(row.newDiscount)}</TableCell>
                         <TableCell className="text-right tabular-nums">
                           {row.walletCredit > 0.009 ? formatWalletAed(row.walletCredit) : "—"}
                         </TableCell>

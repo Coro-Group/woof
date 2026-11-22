@@ -11,11 +11,10 @@ import {
   PEAK_RECALC_NIGHT_TO,
   peakRecalcAmendmentReason,
   peakRecalcMoney,
-  walletCreditForPeakRecalc,
-  walletCreditInAmendmentReason,
   type PeakNightLineIdentity,
 } from "@/lib/peakPricingRecalcDecision";
 import type { ReapplyDiscountAdjustment } from "@/lib/reapplyInvoiceDiscount";
+import type { Database } from "@/integrations/supabase/types";
 import { getSupabase } from "@/lib/supabaseRuntime";
 import { roundMoney2 } from "@/lib/vatConfig";
 
@@ -27,6 +26,8 @@ export type PeakRecalcPreviewRow = {
   oldTotal: number;
   newTotal: number;
   difference: number;
+  oldDiscount: number;
+  newDiscount: number;
   walletCredit: number;
 };
 
@@ -74,7 +75,6 @@ type Candidate = {
   discountPct: number;
   discountAmount: number;
   amountPaid: number;
-  paidAt: string | null;
   bookingId: string;
   roomId: string | null;
   roomName?: string;
@@ -140,6 +140,7 @@ export async function applyPeakPricingRecalc(
       }
       if (
         Math.abs(priced.newTotal - confirmedRow.newTotal) > 0.02
+        || Math.abs(priced.newDiscount - confirmedRow.newDiscount) > 0.02
         || Math.abs(priced.walletCredit - confirmedRow.walletCredit) > 0.02
       ) {
         throw new Error("Totals changed since the preview. Preview again before confirming.");
@@ -173,6 +174,13 @@ type Priced = Candidate & {
   newTotal: number;
   difference: number;
   walletCredit: number;
+  oldDiscount: number;
+  newDiscount: number;
+  nextDiscountPct: number;
+  nextSubtotal: number;
+  vatAed: number;
+  nextStatus: string;
+  adjustmentAmounts: { id?: string; adjustedAmount: number }[];
   linesChanged: boolean;
   collected: number;
 };
@@ -215,12 +223,20 @@ async function priceCandidate(candidate: Candidate): Promise<Priced | null> {
     discountAmount: candidate.discountAmount,
     adjustments: candidate.adjustments,
   });
+  const walletCredit = candidate.walletAlreadyCredited ? 0 : money.walletCredit;
   return {
     ...candidate,
     nextLines,
     newTotal: money.newTotal,
     difference: money.difference,
-    walletCredit: money.walletCredit,
+    walletCredit,
+    oldDiscount: money.oldDiscount,
+    newDiscount: money.newDiscount,
+    nextDiscountPct: money.discountPct,
+    nextSubtotal: money.subtotal,
+    vatAed: money.vatAed,
+    nextStatus: money.nextStatus,
+    adjustmentAmounts: money.adjustmentAmounts,
     linesChanged: !boardingNightLinesMatch(
       existingNights.map((line) => ({
         description: line.description,
@@ -235,7 +251,10 @@ async function priceCandidate(candidate: Candidate): Promise<Priced | null> {
 }
 
 function needsChange(priced: Priced): boolean {
-  return priced.linesChanged || Math.abs(priced.difference) > 0.009 || priced.walletCredit > 0.009;
+  return priced.linesChanged
+    || Math.abs(priced.difference) > 0.009
+    || Math.abs(priced.oldDiscount - priced.newDiscount) > 0.009
+    || priced.walletCredit > 0.009;
 }
 
 function toPreviewRow(priced: Priced): PeakRecalcPreviewRow {
@@ -247,40 +266,25 @@ function toPreviewRow(priced: Priced): PeakRecalcPreviewRow {
     oldTotal: priced.oldTotal,
     newTotal: priced.newTotal,
     difference: priced.difference,
+    oldDiscount: priced.oldDiscount,
+    newDiscount: priced.newDiscount,
     walletCredit: priced.walletCredit,
   };
 }
 
 async function applyCandidate(priced: Priced, actor: StaffActor): Promise<boolean> {
   const totalsMatch = Math.abs(priced.oldTotal - priced.newTotal) <= 0.009;
-  const creditSettled = priced.walletAlreadyCredited || priced.walletCredit <= 0.009;
-  if (!priced.linesChanged && totalsMatch && creditSettled && priced.amendmentReason) return false;
-
-  const excess = walletCreditForPeakRecalc(priced.status, priced.collected, priced.newTotal);
-  const pendingCredit = walletCreditInAmendmentReason(priced.amendmentReason);
-  const creditAmount = priced.walletAlreadyCredited
-    ? 0
-    : excess > 0.009
-      ? excess
-      : pendingCredit;
-  if (!priced.amendmentReason) await logAmendment(priced, Math.max(priced.walletCredit, creditAmount), actor);
-  if (creditAmount > 0.009) await creditWallet(priced, creditAmount, actor);
-  if (excess > 0.009) {
-    if (priced.payments.length > 0) await shrinkPayments(priced.payments, excess);
-    else await lowerAmountPaid(priced.invoiceId, priced.newTotal);
+  const discountMatches = Math.abs(priced.oldDiscount - priced.newDiscount) <= 0.009;
+  const creditSettled = priced.walletCredit <= 0.009;
+  if (!priced.linesChanged && totalsMatch && discountMatches && creditSettled && priced.amendmentReason) {
+    return false;
   }
 
   if (priced.linesChanged) await replaceNightLines(priced);
-
-  if (priced.linesChanged || !totalsMatch || creditAmount > 0.009 || excess > 0.009) {
-    const { error } = await getSupabase().rpc("reapply_invoice_discount", {
-      p_invoice_id: priced.invoiceId,
-      p_amended_by: actor.staffName,
-    });
-    if (error) throw error;
-  }
-
-  if (priced.paidAt) await restorePaidAt(priced.invoiceId, priced.paidAt);
+  if (priced.adjustmentAmounts.length > 0) await updateDiscountAdjustments(priced);
+  if (priced.linesChanged || !totalsMatch || !discountMatches) await saveInvoiceTotals(priced);
+  if (priced.walletCredit > 0.009) await creditWallet(priced, priced.walletCredit, actor);
+  if (!priced.amendmentReason) await logAmendment(priced, priced.walletCredit, actor);
   return true;
 }
 
@@ -309,40 +313,32 @@ async function replaceNightLines(priced: Priced): Promise<void> {
   }
 }
 
-async function shrinkPayments(payments: PaymentRow[], credit: number): Promise<void> {
-  let left = roundMoney2(credit);
-  const ordered = [...payments].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
-  for (const payment of ordered) {
-    if (left <= 0.009) break;
-    const amount = roundMoney2(Number(payment.amount) || 0);
-    if (amount <= 0) continue;
-    if (amount <= left + 0.009) {
-      const { error } = await getSupabase().from("invoice_payments").delete().eq("id", payment.id);
-      if (error) throw error;
-      left = roundMoney2(left - amount);
-      continue;
-    }
-    const note = appendNote(
-      payment.notes,
-      `Peak pricing recalculation reduced this payment by AED ${left.toFixed(2)}. The difference was credited to the wallet.`,
-    );
+async function updateDiscountAdjustments(priced: Priced): Promise<void> {
+  for (const update of priced.adjustmentAmounts) {
+    if (!update.id) continue;
+    const original = priced.adjustments.find((row) => row.id === update.id);
+    const sign = Number(original?.adjusted_amount) < 0 ? -1 : 1;
     const { error } = await getSupabase()
-      .from("invoice_payments")
-      .update({ amount: roundMoney2(amount - left), notes: note })
-      .eq("id", payment.id);
+      .from("billing_adjustments")
+      .update({ adjusted_amount: sign * update.adjustedAmount })
+      .eq("id", update.id);
     if (error) throw error;
-    left = 0;
-  }
-  if (left > 0.009) {
-    throw new Error(`Could not reduce recorded payments by AED ${credit.toFixed(2)}.`);
   }
 }
 
-async function lowerAmountPaid(invoiceId: string, newTotal: number): Promise<void> {
+async function saveInvoiceTotals(priced: Priced): Promise<void> {
   const { error } = await getSupabase()
     .from("invoices")
-    .update({ amount_paid: roundMoney2(newTotal) })
-    .eq("id", invoiceId);
+    .update({
+      subtotal: priced.nextSubtotal,
+      discount_amount: priced.newDiscount,
+      discount_pct: priced.nextDiscountPct,
+      total: priced.newTotal,
+      vat_aed: priced.vatAed,
+      status: priced.nextStatus as Database["public"]["Enums"]["invoice_status"],
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", priced.invoiceId);
   if (error) throw error;
 }
 
@@ -364,7 +360,7 @@ async function creditWallet(priced: Priced, amount: number, actor: StaffActor): 
     invoice_id: null,
     reference_id: priced.invoiceId,
     reference_type: PEAK_PRICING_REFERENCE_TYPE,
-    notes: `Peak dates recalculated for ${priced.invoiceNumber}. Credited AED ${credit.toFixed(2)} to the wallet because the boarding total was lower.`,
+    notes: `Peak dates recalculated for ${priced.invoiceNumber}. Overpayment of AED ${credit.toFixed(2)} credited to the wallet.`,
     performed_by: actor.staffName,
     staff_id: actor.staffId,
   });
@@ -373,17 +369,6 @@ async function creditWallet(priced: Priced, amount: number, actor: StaffActor): 
     .from("owners")
     .update({ wallet_balance: balanceAfter })
     .eq("id", priced.ownerId);
-  if (updateError) throw updateError;
-}
-
-async function restorePaidAt(invoiceId: string, paidAt: string): Promise<void> {
-  const { data, error } = await getSupabase().from("invoices").select("status").eq("id", invoiceId).single();
-  if (error) throw error;
-  if (data.status !== "paid") return;
-  const { error: updateError } = await getSupabase()
-    .from("invoices")
-    .update({ paid_at: paidAt })
-    .eq("id", invoiceId);
   if (updateError) throw updateError;
 }
 
@@ -460,7 +445,6 @@ async function loadCandidates(): Promise<Candidate[]> {
       discountPct: Number(invoice.discount_pct) || 0,
       discountAmount: roundMoney2(Number(invoice.discount_amount) || 0),
       amountPaid: roundMoney2(Number(invoice.amount_paid) || 0),
-      paidAt: invoice.paid_at,
       bookingId: booking.id,
       roomId: booking.room_id,
       roomName: room?.room_number || room?.display_name || undefined,
@@ -596,12 +580,6 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
 function firstOf<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
-}
-
-function appendNote(existing: string | null, sentence: string): string {
-  const base = existing?.trim() ?? "";
-  if (base.includes("Peak pricing recalculation")) return base;
-  return base ? `${base} ${sentence}` : sentence;
 }
 
 function errorMessage(error: unknown): string {

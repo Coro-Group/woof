@@ -94,8 +94,10 @@ describe("peak pricing recalculation", () => {
         },
       ],
     });
-    expect(money.newTotal).toBe(437.1);
-    expect(money.difference).toBe(24);
+    expect(money.newTotal).toBe(433.5);
+    expect(money.newDiscount).toBe(76.5);
+    expect(money.oldDiscount).toBe(72.9);
+    expect(money.difference).toBe(20.4);
     expect(money.walletCredit).toBe(0);
     expect(
       boardingNightLinesMatch(
@@ -123,6 +125,29 @@ describe("peak pricing recalculation", () => {
         ],
       ),
     ).toBe(false);
+  });
+
+  it("keeps a fixed AED discount when the reason has no percent", () => {
+    const money = peakRecalcMoney({
+      status: "outstanding",
+      amountPaid: 0,
+      oldTotal: 100,
+      previousSubtotal: 110,
+      nextSubtotal: 130,
+      discountPct: 0,
+      discountAmount: 10,
+      adjustments: [
+        {
+          adjustment_type: "goodwill_credit",
+          adjusted_amount: 10,
+          reason: "Goodwill",
+          approved_by: "staff",
+        },
+      ],
+    });
+    expect(money.newDiscount).toBe(10);
+    expect(money.newTotal).toBe(120);
+    expect(money.walletCredit).toBe(0);
   });
 
   it("reads a logged wallet credit back from the amendment reason", () => {

@@ -80,6 +80,20 @@ function ownerContact(o) {
 }
 
 /**
+ * What the dog's box on AE's Master shows, as an MSH / LG box does (23 Nov 2026): the
+ * owner's address line, and the standing note — the household's transport notes, then
+ * the dog's own driver note. Sent for every dog, on Voltlines or not.
+ */
+export function clientHome(pet) {
+  const out = {};
+  const address = text(pet?.owner?.address);
+  const note = [text(pet?.owner?.transport_notes), text(pet?.driver_note)].filter(Boolean).join("\n");
+  if (address) out.addressLine = address;
+  if (note) out.transportNote = note;
+  return out;
+}
+
+/**
  * AE's sync body from Woof's requests, regulars, and the day the schedule shows.
  * One facility (Al Quoz), so every dog is site AQ.
  */
@@ -231,6 +245,7 @@ export function buildHubSync({ from, to, regulars, days, pets, openPets = [], al
       lat: pet.owner?.pin_lat ?? null,
       lng: pet.owner?.pin_lng ?? null,
       ...(allowPinless ? ownerContact(pet.owner) : {}),
+      ...clientHome(pet),
     };
   });
 

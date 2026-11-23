@@ -198,7 +198,7 @@ async function sync(db, extraPetIds = []) {
   for (let i = 0; i < ids.length; i += 200) {
     const { data, error } = await db
       .from("pets")
-      .select("id, name, owner_id, voltlines_passenger_id, owners(first_name, last_name, phone, email, address, pin_lat, pin_lng)")
+      .select("id, name, owner_id, voltlines_passenger_id, driver_note, owners(first_name, last_name, phone, email, address, transport_notes, pin_lat, pin_lng)")
       .in("id", ids.slice(i, i + 200));
     if (error) throw new HttpError(500, error.message);
     for (const p of data ?? []) pets.set(p.id, { ...p, owner: p.owners });

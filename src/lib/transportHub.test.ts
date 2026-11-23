@@ -185,11 +185,20 @@ describe("allowPinless — dogs with no Voltlines profile (23 Nov 2026)", () => 
     ]);
   });
 
-  it("with the flag off, Mario is held back and clients carry exactly the old fields", () => {
+  it("with the flag off, Mario is held back and clients carry no contact details (the Master box's address still goes)", () => {
     const off = run([], [regular({ pet_id: "mario" }), regular({ id: "rg2" })], false);
     expect(off.notSent[0]).toMatchObject({ petId: "mario", reason: "not on Voltlines" });
     expect(off.body.clients).toEqual([
-      { ref: "woof:pet:bonnie", passengerId: 101, petName: "Bonnie", ownerName: "Nardeen Turjman", site: "AQ", lat: 25.0, lng: 55.2 },
+      {
+        ref: "woof:pet:bonnie",
+        passengerId: 101,
+        petName: "Bonnie",
+        ownerName: "Nardeen Turjman",
+        site: "AQ",
+        lat: 25.0,
+        lng: 55.2,
+        addressLine: "Villa 3, Springs 4",
+      },
     ]);
   });
 });
@@ -209,5 +218,15 @@ describe("dogs waiting on a request (23 Nov 2026)", () => {
     expect(refs).not.toContain("woof:pet:mario");
     expect(r.body.rules).toHaveLength(0);
     expect(r.body.requests).toHaveLength(0);
+  });
+});
+
+describe("clientHome — the AE Master box's address and note", () => {
+  it("sends the owner's address and transport notes, then the dog's driver note", async () => {
+    const { clientHome } = await import("../../api/_lib/transportHub.js");
+    expect(
+      clientHome({ driver_note: " Shy with men ", owner: { address: " Apt 4, JLT ", transport_notes: "Concierge" } }),
+    ).toEqual({ addressLine: "Apt 4, JLT", transportNote: "Concierge\nShy with men" });
+    expect(clientHome({ owner: null })).toEqual({});
   });
 });

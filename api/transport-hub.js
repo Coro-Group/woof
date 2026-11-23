@@ -61,11 +61,19 @@ async function quote(db, body) {
   const { data: pet } = await db.from("pets").select("id, voltlines_passenger_id").eq("id", petId).maybeSingle();
   if (!pet) throw new HttpError(404, "Dog not found");
   if (!pet.voltlines_passenger_id) {
-    throw new HttpError(409, "This dog is not on Voltlines yet — link the passenger on the request");
+    throw new HttpError(409, "This dog has no transport profile yet — create it on the request first");
   }
   // new_recurring: AE quotes it against the Master base for the weekday of `date`.
   const quoteKind = kind === "new_recurring" ? { kind: "new_recurring" } : {};
-  return hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...quoteKind, ...(location ? { location } : {}) });
+  try {
+    return await hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...quoteKind, ...(location ? { location } : {}) });
+  } catch (err) {
+    // A profile created moments ago is still on its way to the dispatch board.
+    if (err.status === 404) {
+      throw new HttpError(409, "This dog's transport profile is still reaching the dispatch board — press Offer again in a few seconds.");
+    }
+    throw err;
+  }
 }
 
 async function sync(db) {
@@ -87,7 +95,19 @@ async function sync(db) {
     days.push(...batch);
   }
 
+  // Dogs on requests still waiting: AE needs them as clients to offer them times.
+  const { data: openReqs, error: oErr } = await db
+    .from("transport_request")
+    .select("service_date, weekday, transport_request_pet(pet_id)")
+    .in("status", ["received", "offered"])
+    .in("kind", ["one_off", "new_recurring"]);
+  if (oErr) throw new HttpError(500, oErr.message);
+  const openPets = (openReqs ?? [])
+    .filter((r) => r.weekday != null || (r.service_date && r.service_date >= from))
+    .flatMap((r) => (r.transport_request_pet ?? []).map((p) => ({ petId: p.pet_id })));
+
   const petIds = new Set((regulars ?? []).map((r) => r.pet_id));
+  for (const o of openPets) if (o.petId) petIds.add(o.petId);
   for (const d of days) for (const s of d.stops) if (s.pet_id) petIds.add(s.pet_id);
   const pets = new Map();
   const ids = [...petIds];
@@ -100,7 +120,7 @@ async function sync(db) {
     for (const p of data ?? []) pets.set(p.id, { ...p, owner: p.owners });
   }
 
-  const { body, notSent } = buildHubSync({ from, to, regulars: regulars ?? [], days, pets });
+  const { body, notSent } = buildHubSync({ from, to, regulars: regulars ?? [], days, pets, openPets });
   const hub = await hubPost(body);
   const byDog = new Map();
   for (const n of notSent) {

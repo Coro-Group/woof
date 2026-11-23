@@ -33,11 +33,11 @@ export function VoltlinesPetLink({
   // fallback. It is off until MSH agree to writes on the account they share.
   const canCreate = status.data?.writesEnabled === true && status.data?.projectConfigured === true;
   const whyNotCreate = !status.data
-    ? "Checking Voltlines…"
+    ? "Checking…"
     : !status.data.configured
       ? "Woof has no Voltlines token yet."
       : !status.data.writesEnabled
-        ? "Creating on Voltlines is switched off — the account is MSH dispatch's."
+        ? "Creating transport profiles is switched off — ask the transport team."
         : !status.data.projectConfigured
           ? "Woof's Voltlines project is not set (VOLTLINES_PROJECT_ID)."
           : null;
@@ -48,16 +48,16 @@ export function VoltlinesPetLink({
       <p className="text-xs">
         <span className="font-medium capitalize">{petName}</span>
         {passengerId ? (
-          <span className="text-muted-foreground"> · Voltlines passenger {passengerId}</span>
+          <span className="text-muted-foreground"> · transport profile {passengerId}</span>
         ) : (
-          <span className="text-amber-700 dark:text-amber-400"> · not on Voltlines yet. Link the passenger so the vans can take this request.</span>
+          <span className="text-amber-700 dark:text-amber-400"> · no transport profile yet. Find it if it already exists, or create it.</span>
         )}
       </p>
       <div className="flex gap-2">
         <Input
           value={term}
           onChange={(e) => setTerm(e.target.value)}
-          placeholder="Search Voltlines by name"
+          placeholder="Search transport profiles by name"
           data-testid="transport-voltlines-search"
         />
         <Button
@@ -94,7 +94,7 @@ export function VoltlinesPetLink({
             variant="secondary"
             size="sm"
             disabled={!canCreate || create.isPending}
-            title={whyNotCreate ?? "Create this dog and, if needed, the household on Voltlines"}
+            title={whyNotCreate ?? "Create this dog's transport profile (and the household's, if needed)"}
             data-testid="transport-voltlines-create"
             onClick={() =>
               create.mutate(
@@ -110,7 +110,7 @@ export function VoltlinesPetLink({
             }
           >
             {create.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-            Create on Voltlines
+            Create transport profile
           </Button>
         )}
       </div>

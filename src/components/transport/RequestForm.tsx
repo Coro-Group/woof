@@ -22,7 +22,7 @@ import { SHORT_DAYS, dayDate, nextDay, shortDate } from "@/lib/transportRequests
 import { useSameDayConflicts } from "@/hooks/useTransport";
 import { HubOfferTimes, type AcceptedOffer } from "@/components/transport/HubOfferTimes";
 import { PinField, emptyPin, pinReady, type PinDraft } from "@/components/transport/PinField";
-import { VoltlinesPetLink } from "@/components/transport/VoltlinesPetLink";
+import { TransportProfileStep } from "@/components/transport/TransportProfileStep";
 import { TONE } from "@/components/transport/status";
 import { PinBadge, dipFirst } from "@/components/transport/transportShared";
 import { VaccineStatusBadge } from "@/components/VaccineStatusBadge";
@@ -434,7 +434,7 @@ export function RequestForm({
                   <div className="flex flex-wrap items-center gap-2">
                     <PinBadge lat={homeLat} lng={homeLng} />
                     {(owner.pin_source === "voltlines" || (owner.pin_lat == null && voltlinesHome)) && (
-                      <span className="text-muted-foreground">From Voltlines{voltlinesHome?.petName ? ` · ${voltlinesHome.petName}` : ""}</span>
+                      <span className="text-muted-foreground">From the transport profile{voltlinesHome?.petName ? ` · ${voltlinesHome.petName}` : ""}</span>
                     )}
                     {homeAddress && <span className="text-muted-foreground">{homeAddress}</span>}
                   </div>
@@ -533,9 +533,9 @@ export function RequestForm({
                   {/* AE shows every dog's Voltlines state here, not just the one that is selected:
                       a request for a dog the vans cannot see is the thing staff must notice first. */}
                   {pet.voltlines_passenger_id ? (
-                    <Badge variant="outline" className={`text-[10px] ${TONE.good.badge}`}>On Voltlines</Badge>
+                    <Badge variant="outline" className={`text-[10px] ${TONE.good.badge}`}>Transport profile</Badge>
                   ) : (
-                    <Badge variant="outline" className={`text-[10px] ${TONE.warn.badge}`}>Not on Voltlines</Badge>
+                    <Badge variant="outline" className={`text-[10px] ${TONE.warn.badge}`}>No transport profile</Badge>
                   )}
                   <span className="flex-1" />
                   {pet.driver_note?.trim() && (
@@ -545,23 +545,19 @@ export function RequestForm({
               ))}
             </div>
           )}
-          {missingVoltlines.length > 0 && (
-            <div className={`rounded-md border p-3 text-sm ${TONE.warn.bg} ${TONE.warn.border}`}>
-              <p className={`font-medium ${TONE.warn.text}`}>
-                {missingVoltlines.length === 1
-                  ? `${missingVoltlines[0].name} is`
-                  : `${missingVoltlines.map((p) => p.name).join(" and ")} are`}{" "}
-                not on Voltlines
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                The request still saves. Link each one below so the vans can take it.
-              </p>
-            </div>
+          {/* Times are only offered for a dog with a transport profile and a home pin (23 Nov 2026). */}
+          {ownerId && !isCancellation && !isPause && (missingVoltlines.length > 0 || (selectedPetIds.length > 0 && homeLat == null)) && (
+            <TransportProfileStep
+              ownerId={ownerId}
+              ownerName={ownerLabel || "the client"}
+              address={homeAddress || null}
+              pinLat={homeLat}
+              pinLng={homeLng}
+              pets={pets
+                .filter((p) => selectedPetIds.includes(p.id))
+                .map((p) => ({ id: p.id, name: p.name, voltlines_passenger_id: p.voltlines_passenger_id ?? null }))}
+            />
           )}
-          {/* One panel per dog that still needs linking — a second dog used to hide the control. */}
-          {missingVoltlines.map((pet) => (
-            <VoltlinesPetLink key={pet.id} petId={pet.id} petName={pet.name} passengerId={null} />
-          ))}
         </div>
       )}
 

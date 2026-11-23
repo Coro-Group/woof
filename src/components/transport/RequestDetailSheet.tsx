@@ -45,6 +45,7 @@ import {
 } from "@/lib/transportRequests";
 import { OwnerCombobox } from "@/components/daycare/DaycareOwnerCombobox";
 import { BranchBadge, PinBadge, RequestPetNames, dipFirst } from "@/components/transport/transportShared";
+import { TransportProfileStep } from "@/components/transport/TransportProfileStep";
 
 import { OfferList, PromiseBox, VOLTLINES_QUOTE_NOTE, legLabel, storedToPanelOffers, useSameDayConfirm } from "@/components/transport/OfferPanel";
 import { Badge } from "@/components/ui/badge";
@@ -229,7 +230,9 @@ function DetailBody({
   // Every option on every offered leg would push someone out: nothing here can accept it.
   const nothingToAccept =
     alreadyOffered && openLegs.every((r) => (offersByLeg.get(r.id) ?? []).every((o) => (o.displaces ?? 0) > 0));
-  const byHand = offerable && (notOnVoltlines || pinless || nothingToAccept);
+  // No transport profile (or no pin) is fixed on the request, never booked around (23 Nov 2026).
+  // Book by hand is left only for a day where every option would push someone out.
+  const byHand = offerable && nothingToAccept && !(notOnVoltlines || pinless);
   const conflicts = useSameDayConflicts(
     lead.owner_id,
     petIds,
@@ -549,12 +552,15 @@ function DetailBody({
           {offerable && legsWithoutTime.length > 0 && !dirty && (
             <p className={`text-xs ${TONE.warn.text}`}>Set the time they asked for on each trip above, save, then Offer.</p>
           )}
-          {offerable && (notOnVoltlines || pinless) && (
-            <p className={`text-xs ${TONE.warn.text}`}>
-              {notOnVoltlines
-                ? "A dog on this request is not on Voltlines, so Offer cannot price it. Book by hand with the time above, and match the dog on Voltlines."
-                : "This client has no usable pin, so Offer cannot price it. Book by hand with the time above, and add the home pin."}
-            </p>
+          {offerable && (notOnVoltlines || pinless) && owner && (
+            <TransportProfileStep
+              ownerId={ownerId}
+              ownerName={ownerLabel || "the client"}
+              address={owner.address ?? null}
+              pinLat={homeLat}
+              pinLng={homeLng}
+              pets={petIds.map((id) => petById.get(id)).filter((p): p is NonNullable<typeof p> => !!p).map((p) => ({ id: p.id, name: p.name, voltlines_passenger_id: p.voltlines_passenger_id ?? null }))}
+            />
           )}
           {!rejecting ? (
             <div className="flex flex-wrap gap-2">

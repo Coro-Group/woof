@@ -39,7 +39,7 @@ export type PanelOffer = {
   recommended?: boolean;
 };
 
-export const VOLTLINES_QUOTE_NOTE = "These times come from Voltlines route data, not a person.";
+export const VOLTLINES_QUOTE_NOTE = "These times come from the vans' actual routes, not a person.";
 
 const km = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n) * 10) / 10);
 const mins = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n)));

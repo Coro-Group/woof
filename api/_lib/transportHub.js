@@ -69,7 +69,7 @@ const ownerName = (o) => [o?.first_name, o?.last_name].map((v) => String(v ?? ""
  * AE's sync body from Woof's requests, regulars, and the day the schedule shows.
  * One facility (Al Quoz), so every dog is site AQ.
  */
-export function buildHubSync({ from, to, regulars, days, pets }) {
+export function buildHubSync({ from, to, regulars, days, pets, openPets = [] }) {
   const notSent = [];
   const usedPets = new Set();
   const note = (what, petId, reason) => notSent.push({ what, petId, pet: pets.get(petId)?.name ?? null, reason });
@@ -143,7 +143,11 @@ export function buildHubSync({ from, to, regulars, days, pets }) {
       if (s.source === "request") {
         if (s.struck) continue; // cancelled, or a home trip a boarding stay pauses
         // AE plans only what has been agreed: a request still received or offered waits.
-        if (s.status && s.status !== "approved") continue;
+        // Its dog goes as a client all the same, so AE can offer it times (23 Nov 2026).
+        if (s.status && s.status !== "approved") {
+          use(s.pet_id);
+          continue;
+        }
         if (s.purpose === "transfer") {
           note(`branch move ${date}`, s.pet_id, "cross-facility move — Woof has one site");
           continue;
@@ -184,6 +188,10 @@ export function buildHubSync({ from, to, regulars, days, pets }) {
       }
     }
   }
+
+  // Dogs on a request still waiting (received / offered) — a new regular is not on any
+  // day yet — go as clients with nothing to plan, so AE can quote them (23 Nov 2026).
+  for (const o of openPets) if (o.petId && linked(o.petId)) use(o.petId);
 
   const clients = [...usedPets].map((petId) => {
     const pet = pets.get(petId);

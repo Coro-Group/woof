@@ -97,3 +97,21 @@ describe("buildHubSync", () => {
     expect(body.requests.map((r) => r.ref)).toEqual(["woof:request:q1:bonnie", "woof:daycare:d1:bonnie:dropoff"]);
   });
 });
+
+describe("dogs waiting on a request (23 Nov 2026)", () => {
+  it("sends a dog on an open request as a client with nothing to plan, unless it has no transport profile", () => {
+    const r = buildHubSync({
+      from: "2026-11-23",
+      to: "2026-11-30",
+      regulars: [],
+      days: [],
+      pets,
+      openPets: [{ petId: "bonnie" }, { petId: "mario" }],
+    });
+    const refs = r.body.clients.map((c: { ref: string }) => c.ref);
+    expect(refs).toContain("woof:pet:bonnie");
+    expect(refs).not.toContain("woof:pet:mario");
+    expect(r.body.rules).toHaveLength(0);
+    expect(r.body.requests).toHaveLength(0);
+  });
+});

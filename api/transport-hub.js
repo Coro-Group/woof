@@ -9,7 +9,7 @@
 export const config = { maxDuration: 300 };
 
 import { createClient } from "@supabase/supabase-js";
-import { SYNC_DAYS, addDays, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
+import { HUB_PREFIX, SYNC_DAYS, addDays, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
 
 function json(res, status, body) {
   res.status(status).setHeader("Content-Type", "application/json");
@@ -93,7 +93,72 @@ async function quote(db, body, retried = false) {
   }
 }
 
+const usablePin = (lat, lng) =>
+  typeof lat === "number" && typeof lng === "number" && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+
+/**
+ * What AE learned about the dogs it was sent (response `links`). Fills gaps only:
+ * a passenger id the pet lacks, a pin or address the owner lacks. Never overwrites,
+ * and never fails the sync — the hub has already taken the picture by now.
+ */
+async function applyLinks(db, links, pets) {
+  const result = { linked: 0, pinned: 0, mismatched: [] };
+  const pinnedOwners = new Set();
+  const addressedOwners = new Set();
+  for (const link of Array.isArray(links) ? links : []) {
+    const petId = typeof link?.ref === "string" && link.ref.startsWith(`${HUB_PREFIX}pet:`) ? link.ref.slice(`${HUB_PREFIX}pet:`.length) : null;
+    const pet = petId ? pets.get(petId) : null;
+    if (!pet) continue;
+
+    const passengerId = Number(link.passengerId);
+    if (Number.isInteger(passengerId) && passengerId > 0) {
+      if (!pet.voltlines_passenger_id) {
+        const { error } = await db.from("pets").update({ voltlines_passenger_id: String(passengerId) }).eq("id", petId).is("voltlines_passenger_id", null);
+        if (!error) {
+          pet.voltlines_passenger_id = String(passengerId);
+          result.linked += 1;
+        }
+      } else if (Number(pet.voltlines_passenger_id) !== passengerId) {
+        result.mismatched.push({ petId, pet: pet.name ?? null, woof: pet.voltlines_passenger_id, hub: String(passengerId) });
+      }
+    }
+
+    const owner = pet.owner;
+    const ownerId = pet.owner_id;
+    if (!owner || !ownerId) continue;
+    if (owner.pin_lat == null && owner.pin_lng == null && !pinnedOwners.has(ownerId) && usablePin(link.lat, link.lng)) {
+      pinnedOwners.add(ownerId);
+      const { error } = await db
+        .from("owners")
+        .update({ pin_lat: link.lat, pin_lng: link.lng, pin_source: "hub", pin_updated_at: new Date().toISOString() })
+        .eq("id", ownerId)
+        .is("pin_lat", null)
+        .is("pin_lng", null);
+      if (!error) {
+        owner.pin_lat = link.lat;
+        owner.pin_lng = link.lng;
+        result.pinned += 1;
+      }
+    }
+    const addressLine = typeof link.addressLine === "string" ? link.addressLine.trim() : "";
+    if (!String(owner.address ?? "").trim() && addressLine && !addressedOwners.has(ownerId)) {
+      addressedOwners.add(ownerId);
+      const { error } = await db.from("owners").update({ address: addressLine }).eq("id", ownerId).or("address.is.null,address.eq.");
+      if (!error) owner.address = addressLine;
+    }
+  }
+  return result;
+}
+
 async function sync(db, extraPetIds = []) {
+  // Does AE take dogs with no Voltlines profile? Ask once; any failure means no.
+  let allowPinless = false;
+  try {
+    const status = await hubPost({ op: "status" });
+    allowPinless = Array.isArray(status?.features) && status.features.includes("pinless_clients");
+  } catch {
+    allowPinless = false;
+  }
   const from = dubaiToday();
   const to = addDays(from, SYNC_DAYS - 1);
   const { data: regulars, error: rErr } = await db.from("transport_regular").select("*").eq("is_active", true);
@@ -133,14 +198,15 @@ async function sync(db, extraPetIds = []) {
   for (let i = 0; i < ids.length; i += 200) {
     const { data, error } = await db
       .from("pets")
-      .select("id, name, voltlines_passenger_id, owners(first_name, last_name, pin_lat, pin_lng)")
+      .select("id, name, owner_id, voltlines_passenger_id, owners(first_name, last_name, phone, email, address, pin_lat, pin_lng)")
       .in("id", ids.slice(i, i + 200));
     if (error) throw new HttpError(500, error.message);
     for (const p of data ?? []) pets.set(p.id, { ...p, owner: p.owners });
   }
 
-  const { body, notSent } = buildHubSync({ from, to, regulars: regulars ?? [], days, pets, openPets });
+  const { body, notSent } = buildHubSync({ from, to, regulars: regulars ?? [], days, pets, openPets, allowPinless });
   const hub = await hubPost(body);
+  const back = await applyLinks(db, hub?.links, pets);
   const byDog = new Map();
   for (const n of notSent) {
     const key = `${n.petId}|${n.reason}`;
@@ -153,6 +219,10 @@ async function sync(db, extraPetIds = []) {
     range: { from, to },
     sent: { dogs: body.clients.length, regulars: body.rules.length, dated: body.requests.length },
     hub,
+    linked: back.linked,
+    pinned: back.pinned,
+    mismatched: back.mismatched.length,
+    mismatches: back.mismatched,
     notSent: [...byDog.values()].sort((a, b) => String(a.pet).localeCompare(String(b.pet))),
   };
 }
@@ -189,7 +259,7 @@ async function autoSync(token) {
     let failure = null;
     try {
       const r = await sync(db);
-      summary = { range: r.range, sent: r.sent, hub: r.hub, notSent: r.notSent.length, generation };
+      summary = { range: r.range, sent: r.sent, hub: r.hub, linked: r.linked, pinned: r.pinned, mismatched: r.mismatched, notSent: r.notSent.length, generation };
     } catch (err) {
       failure = String(err?.message ?? err).slice(0, 1000);
     }

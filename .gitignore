@@ -55,3 +55,4 @@ outputs/
 
 # Migration audit binaries (authority xlsx live outside repo; JSON/CSV/SQL kept for replay)
 exports/*.xlsx
+.env*

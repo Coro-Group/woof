@@ -112,6 +112,88 @@ describe("buildHubSync", () => {
   });
 });
 
+describe("allowPinless — dogs with no Voltlines profile (23 Nov 2026)", () => {
+  const richOwner = { ...owner, phone: "+971500000000", email: "n@example.com", address: "Villa 3, Springs 4" };
+  const pinPets = new Map([
+    ["bonnie", { id: "bonnie", name: "Bonnie", voltlines_passenger_id: "101", owner: richOwner }],
+    ["mario", { id: "mario", name: "Mario", voltlines_passenger_id: null, owner: richOwner }],
+  ]);
+  const run = (days: Array<{ date: string; stops: unknown[] }>, regulars: unknown[] = [], allowPinless = true) =>
+    buildHubSync({ from: "2026-11-23", to: "2026-11-30", regulars, days, pets: pinPets, allowPinless });
+
+  it("sends an unlinked dog as a client with no passengerId, and keeps its regular and stops", () => {
+    const { body, notSent } = run(
+      [
+        {
+          date: "2026-11-24",
+          stops: [
+            stop({ source: "request", source_id: "q1", pet_id: "mario", status: "approved", run_time: "09:00:00" }),
+            stop({ source: "daycare", source_id: "d1", pet_id: "mario", direction: "dropoff", run_time: null }),
+          ],
+        },
+      ],
+      [regular({ pet_id: "mario" })],
+    );
+    expect(notSent).toEqual([]);
+    expect(body.rules).toHaveLength(2);
+    expect(body.requests.map((r: { ref: string }) => r.ref)).toEqual(["woof:request:q1:mario", "woof:daycare:d1:mario:dropoff"]);
+    const client = body.clients[0] as Record<string, unknown>;
+    expect(client).toMatchObject({
+      ref: "woof:pet:mario",
+      petName: "Mario",
+      ownerName: "Nardeen Turjman",
+      site: "AQ",
+      lat: 25.0,
+      lng: 55.2,
+      ownerPhone: "+971500000000",
+      ownerEmail: "n@example.com",
+      addressLine: "Villa 3, Springs 4",
+    });
+    expect("passengerId" in client).toBe(false);
+  });
+
+  it("still carries passengerId for a dog that has one, and sends an owner with no pin", () => {
+    const noPin = new Map([["mario", { id: "mario", name: "Mario", voltlines_passenger_id: null, owner: { first_name: "A", last_name: null } }]]);
+    const withId = buildHubSync({ from: "2026-11-23", to: "2026-11-30", regulars: [regular()], days: [], pets: pinPets, allowPinless: true });
+    expect(withId.body.clients[0]).toMatchObject({ passengerId: 101 });
+    const bare = buildHubSync({ from: "2026-11-23", to: "2026-11-30", regulars: [regular({ pet_id: "mario" })], days: [], pets: noPin, allowPinless: true });
+    expect(bare.body.clients[0]).toMatchObject({ lat: null, lng: null });
+    expect(bare.body.clients[0]).not.toHaveProperty("ownerPhone");
+    expect(bare.body.clients[0]).not.toHaveProperty("addressLine");
+  });
+
+  it("sends a dog on an open request as a client", () => {
+    const r = buildHubSync({ from: "2026-11-23", to: "2026-11-30", regulars: [], days: [], pets: pinPets, openPets: [{ petId: "mario" }], allowPinless: true });
+    expect(r.body.clients.map((c: { ref: string }) => c.ref)).toEqual(["woof:pet:mario"]);
+  });
+
+  it("still holds back a cross-facility regular and a one-off at another address with no pin", () => {
+    const { body, notSent } = run(
+      [
+        {
+          date: "2026-11-24",
+          stops: [stop({ source: "request", source_id: "q2", pet_id: "mario", status: "approved", location_text: "Marina Walk" })],
+        },
+      ],
+      [regular({ pet_id: "mario", transfer_to_branch_id: "b2" })],
+    );
+    expect(body.rules).toEqual([]);
+    expect(body.requests).toEqual([]);
+    expect(notSent.map((n: { reason: string }) => n.reason).sort()).toEqual([
+      "a different address with no pin",
+      "cross-facility regular — Woof has one site",
+    ]);
+  });
+
+  it("with the flag off, Mario is held back and clients carry exactly the old fields", () => {
+    const off = run([], [regular({ pet_id: "mario" }), regular({ id: "rg2" })], false);
+    expect(off.notSent[0]).toMatchObject({ petId: "mario", reason: "not on Voltlines" });
+    expect(off.body.clients).toEqual([
+      { ref: "woof:pet:bonnie", passengerId: 101, petName: "Bonnie", ownerName: "Nardeen Turjman", site: "AQ", lat: 25.0, lng: 55.2 },
+    ]);
+  });
+});
+
 describe("dogs waiting on a request (23 Nov 2026)", () => {
   it("sends a dog on an open request as a client with nothing to plan, unless it has no transport profile", () => {
     const r = buildHubSync({

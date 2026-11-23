@@ -65,16 +65,33 @@ export function slotStartMin(time) {
 
 const ownerName = (o) => [o?.first_name, o?.last_name].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ") || null;
 
+const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/** ownerPhone / ownerEmail / addressLine — each only when the owner has one. */
+function ownerContact(o) {
+  const out = {};
+  const phone = text(o?.phone);
+  const email = text(o?.email);
+  const address = text(o?.address);
+  if (phone) out.ownerPhone = phone;
+  if (email) out.ownerEmail = email;
+  if (address) out.addressLine = address;
+  return out;
+}
+
 /**
  * AE's sync body from Woof's requests, regulars, and the day the schedule shows.
  * One facility (Al Quoz), so every dog is site AQ.
  */
-export function buildHubSync({ from, to, regulars, days, pets, openPets = [] }) {
+export function buildHubSync({ from, to, regulars, days, pets, openPets = [], allowPinless = false }) {
   const notSent = [];
   const usedPets = new Set();
   const note = (what, petId, reason) => notSent.push({ what, petId, pet: pets.get(petId)?.name ?? null, reason });
   const ref = (...parts) => `${HUB_PREFIX}${parts.join(":")}`;
-  const linked = (petId) => !!pets.get(petId)?.voltlines_passenger_id;
+  const hasProfile = (petId) => !!pets.get(petId)?.voltlines_passenger_id;
+  // allowPinless (AE advertises "pinless_clients"): a dog with no Voltlines profile still goes,
+  // as a client without a passengerId. It only has to be a dog Woof knows.
+  const linked = (petId) => (allowPinless ? pets.has(petId) : hasProfile(petId));
   const use = (petId) => usedPets.add(petId);
 
   const rules = [];
@@ -202,12 +219,18 @@ export function buildHubSync({ from, to, regulars, days, pets, openPets = [] }) 
     const pet = pets.get(petId);
     return {
       ref: ref("pet", petId),
-      passengerId: Number(pet.voltlines_passenger_id),
+      // Pinless: passengerId only when the dog is on Voltlines (a positive integer).
+      ...(!allowPinless
+        ? { passengerId: Number(pet.voltlines_passenger_id) }
+        : Number.isInteger(Number(pet.voltlines_passenger_id)) && Number(pet.voltlines_passenger_id) > 0
+          ? { passengerId: Number(pet.voltlines_passenger_id) }
+          : {}),
       petName: pet.name,
       ownerName: ownerName(pet.owner),
       site: WOOF_SITE,
       lat: pet.owner?.pin_lat ?? null,
       lng: pet.owner?.pin_lng ?? null,
+      ...(allowPinless ? ownerContact(pet.owner) : {}),
     };
   });
 

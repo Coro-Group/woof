@@ -678,6 +678,11 @@ export type HubSyncResult = {
     requests: { written: number; cancelled: number; skipped: Array<{ ref: string; reason: string }> };
   };
   notSent: Array<{ petId: string; pet: string | null; reason: string; count: number }>;
+  /** What AE sent back: passenger ids filled in, home pins filled in, ids that disagree (never overwritten). */
+  linked?: number;
+  pinned?: number;
+  mismatched?: number;
+  mismatches?: Array<{ petId: string; pet: string | null; woof: string; hub: string }>;
 };
 
 async function hubApi<T>(init?: RequestInit): Promise<T> {

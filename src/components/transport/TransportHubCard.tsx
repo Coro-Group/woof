@@ -39,8 +39,13 @@ export function TransportHubCard() {
             sync.mutate(undefined, {
               onSuccess: (res) => {
                 const skipped = res.notSent.length;
+                const back = [
+                  `${res.linked ?? 0} linked`,
+                  `${res.pinned ?? 0} pinned`,
+                  ...(res.mismatched ? [`${res.mismatched} id mismatch${res.mismatched === 1 ? "" : "es"}`] : []),
+                ].join(", ");
                 toast.success(
-                  `Sent ${res.sent.dogs} dogs, ${res.sent.regulars} regulars, ${res.sent.dated} dated runs${skipped ? `. ${skipped} not sent` : ""}`,
+                  `Sent ${res.sent.dogs} dogs, ${res.sent.regulars} regulars, ${res.sent.dated} dated runs · ${back}${skipped ? `. ${skipped} not sent` : ""}`,
                 );
               },
               onError: (err) => toast.error(err.message),

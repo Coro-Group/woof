@@ -166,6 +166,11 @@ export function buildHubSync({ from, to, regulars, days, pets, openPets = [] }) 
             ref: ref("request", s.source_id, s.pet_id),
             kind: "one_off",
             startMin: slotStartMin(s.run_time),
+            // A half-past home trip's one-hour window (9:30–10:30 in the 9–10 slot); AE
+            // promises it instead of the slot. Vet legs keep their own times out of it.
+            ...(s.purpose === "regular" && s.window_start_min != null && s.window_end_min - s.window_start_min === 60
+              ? { windowStartMin: s.window_start_min, windowEndMin: s.window_end_min }
+              : {}),
             note: [s.purpose === "vet" ? "Vet" : null, s.note].filter(Boolean).join(" · ") || null,
             ...(location ? { location } : {}),
           },

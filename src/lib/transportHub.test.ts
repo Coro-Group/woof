@@ -84,6 +84,20 @@ describe("buildHubSync", () => {
     expect(notSent[0]).toMatchObject({ petId: "mario", reason: "not on Voltlines" });
   });
 
+  it("sends a half-past one-off in its hour slot with its one-hour window", () => {
+    const { body } = build([
+      {
+        date: "2026-11-24",
+        stops: [
+          stop({ source: "request", source_id: "q1", purpose: "regular", run_time: "09:30:00", window_start_min: 570, window_end_min: 630 }),
+          stop({ source: "request", source_id: "v1", purpose: "vet", run_time: "11:00:00", window_start_min: 660, window_end_min: 780 }),
+        ],
+      },
+    ]);
+    expect(body.requests[0]).toEqual(expect.objectContaining({ ref: "woof:request:q1:bonnie", startMin: 540, windowStartMin: 570, windowEndMin: 630 }));
+    expect(body.requests[1].windowStartMin).toBeUndefined();
+  });
+
   it("sends a one-off request and a daycare trip that has no regular", () => {
     const { body } = build([
       {

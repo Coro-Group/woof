@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupBySlot, mergeDemand, runSlotLabel, slotLabelFor, slotStartOf, type DemandRow } from "@/lib/transportSchedule";
+import { groupBySlot, mergeDemand, runSlotLabel, slotLabelFor, slotStartOf, timeChoices, type DemandRow } from "@/lib/transportSchedule";
 
 describe("slotLabelFor", () => {
   it("matches AE's transport_slots labels", () => {
@@ -19,8 +19,8 @@ describe("runSlotLabel", () => {
     expect(runSlotLabel("07:45:00")).toBe("07-08AM");
     expect(runSlotLabel(null)).toBeNull();
   });
-  it("is the flexible window when one is set", () => {
-    expect(runSlotLabel("06:00", 360, 540)).toBe("6–9 AM · flexible");
+  it("is the trip's own window when one is set", () => {
+    expect(runSlotLabel("09:00", 570, 630)).toBe("9:30–10:30 AM");
   });
 });
 
@@ -61,5 +61,20 @@ describe("cross-branch regulars", () => {
     ]);
     expect(stop.struck).toBeNull();
     expect(stop.badge).toBe("transfer");
+  });
+});
+
+describe("timeChoices", () => {
+  it("lists each hour then its half past, booked in that hour", () => {
+    const choices = timeChoices([
+      { start_min: 600, label: "10-11AM" },
+      { start_min: 540, label: "09-10AM" },
+    ]);
+    expect(choices.map((c) => [c.label, c.slotStart, c.window])).toEqual([
+      ["09-10AM", 540, null],
+      ["9:30–10:30 AM", 540, [570, 630]],
+      ["10-11AM", 600, null],
+      ["10:30–11:30 AM", 600, [630, 690]],
+    ]);
   });
 });

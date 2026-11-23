@@ -572,6 +572,8 @@ export type RegularDayChange = {
   direction: "pickup" | "dropoff";
   /** "HH:00" of the new hour slot, or null for no transport that way. */
   time: string | null;
+  /** A half-past booking's one-hour window (9:30–10:30 in the 9–10 slot); null = the slot. */
+  window?: [number, number] | null;
   today: string;
   yesterday: string;
   actor: string;
@@ -580,8 +582,8 @@ export type RegularDayChange = {
 /**
  * AE's Edit pattern change: one weekday, one direction, from today. The old row is kept
  * as history (it ends yesterday) unless it only began today, then it is edited in place.
- * Moving a direction to a new hour clears that direction's flexible window, as AE's
- * custom window follows the slot.
+ * The changed direction takes the new time's window: a half-past time (9:30–10:30) is
+ * the 9–10 slot plus that one-hour window; an on-the-hour time has none.
  */
 export function useChangeRegularDay() {
   const invalidate = useInvalidateTransport();
@@ -594,10 +596,10 @@ export function useChangeRegularDay() {
       const wantsDo = c.direction === "dropoff" ? !!c.time : !!ex && ex.direction !== "pickup";
       const direction = wantsPu && wantsDo ? "both" : wantsPu ? "pickup" : wantsDo ? "dropoff" : null;
       const windows = {
-        pickup_window_start_min: c.direction === "pickup" || !ex ? null : ex.pickup_window_start_min,
-        pickup_window_end_min: c.direction === "pickup" || !ex ? null : ex.pickup_window_end_min,
-        dropoff_window_start_min: c.direction === "dropoff" || !ex ? null : ex.dropoff_window_start_min,
-        dropoff_window_end_min: c.direction === "dropoff" || !ex ? null : ex.dropoff_window_end_min,
+        pickup_window_start_min: c.direction === "pickup" ? c.window?.[0] ?? null : ex ? ex.pickup_window_start_min : null,
+        pickup_window_end_min: c.direction === "pickup" ? c.window?.[1] ?? null : ex ? ex.pickup_window_end_min : null,
+        dropoff_window_start_min: c.direction === "dropoff" ? c.window?.[0] ?? null : ex ? ex.dropoff_window_start_min : null,
+        dropoff_window_end_min: c.direction === "dropoff" ? c.window?.[1] ?? null : ex ? ex.dropoff_window_end_min : null,
       };
       const next = direction
         ? {

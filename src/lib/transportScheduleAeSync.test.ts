@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   boardingClashes,
   boardingPauseReason,
-  flexibleWindowLabel,
+  ownWindowLabel,
   mergeDemand,
   pausedLabel,
   transferDefaultDirection,
@@ -96,11 +96,10 @@ describe("pausedLabel", () => {
   });
 });
 
-describe("flexibleWindowLabel", () => {
+describe("ownWindowLabel", () => {
   it("formats the owner's wider window", () => {
-    expect(flexibleWindowLabel(360, 540)).toBe("6–9 AM · flexible");
-    expect(flexibleWindowLabel(660, 780)).toBe("11 AM–1 PM · flexible");
-    expect(flexibleWindowLabel(390, 480)).toBe("6:30–8 AM · flexible");
-    expect(flexibleWindowLabel(null, 540)).toBeNull();
+    expect(ownWindowLabel(570, 630)).toBe("9:30–10:30 AM");
+    expect(ownWindowLabel(690, 750)).toBe("11:30 AM–12:30 PM");
+    expect(ownWindowLabel(null, 540)).toBeNull();
   });
 });

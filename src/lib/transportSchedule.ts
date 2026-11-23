@@ -303,12 +303,49 @@ export function windowLabel(startMin: number, endMin: number): string {
 }
 
 /**
- * A regular's own window, set on purpose (AE's customWindowLabel): "6–9 AM · flexible".
- * Null when it has none — then the booked hour slot is the window.
+ * A trip's own window (AE's custom window): "9:30–10:30 AM". Null when it has none —
+ * then the booked hour slot is the window.
  */
-export function flexibleWindowLabel(start: number | null | undefined, end: number | null | undefined): string | null {
+export function ownWindowLabel(start: number | null | undefined, end: number | null | undefined): string | null {
   if (start == null || end == null) return null;
-  return `${windowLabel(start, end)} · flexible`;
+  return windowLabel(start, end);
+}
+
+/**
+ * Petzania and WOOF windows are always one hour (23 Nov 2026), on the hour or half past:
+ * 9:30–10:30 is booked in AE's 9–10 slot with that window. MSH keeps its wider ones.
+ */
+export const WINDOW_LENGTH_MIN = 60;
+
+/** The half-past starts staff can pick between 6:30 AM and 8:30 PM. */
+export const HALF_PAST_STARTS: number[] = Array.from({ length: 15 }, (_, i) => 390 + i * 60);
+
+/** The window that starts at startMin: [start, start + 1 hour]. */
+export function oneHourWindow(startMin: number): [number, number] {
+  return [startMin, startMin + WINDOW_LENGTH_MIN];
+}
+
+/**
+ * Every time a trip can be booked at, for one direction's AE hour slots: each hour
+ * ("09-10AM") followed by its half past ("9:30–10:30 AM"). `startMin` is the value
+ * pickers hold; `slotStart` is the hour slot it is booked in; `window` is set for a
+ * half past only (on the hour, the slot is the window).
+ */
+export type TimeChoice = { startMin: number; slotStart: number; label: string; window: [number, number] | null };
+export function timeChoices(slots: { start_min: number; label: string }[]): TimeChoice[] {
+  return [...slots]
+    .sort((a, b) => a.start_min - b.start_min)
+    .flatMap((s) => [
+      { startMin: s.start_min, slotStart: s.start_min, label: s.label, window: null },
+      ...(HALF_PAST_STARTS.includes(s.start_min + 30)
+        ? [{ startMin: s.start_min + 30, slotStart: s.start_min, label: windowLabel(s.start_min + 30, s.start_min + 90), window: oneHourWindow(s.start_min + 30) }]
+        : []),
+    ]);
+}
+
+/** The hour slot a window is booked in: the hour its start falls in ("09:00" for 9:30). */
+export function slotTimeForWindow(startMin: number): string {
+  return slotTime(Math.floor(startMin / 60) * 60);
 }
 
 // ── Hour slots (AE transport_slots: "06-07AM" … "11-12PM", "12-1PM" … "8-9PM") ──
@@ -334,7 +371,7 @@ export function slotTime(startMin: number): string {
 }
 
 /**
- * The label a run shows, as AE's boards: its own flexible window when one is set,
+ * The label a run shows, as AE's boards: its own window when one is set,
  * otherwise the hour slot it is booked in. Null when nobody has set a time.
  */
 export function runSlotLabel(
@@ -342,8 +379,8 @@ export function runSlotLabel(
   windowStart?: number | null,
   windowEnd?: number | null,
 ): string | null {
-  const flexible = flexibleWindowLabel(windowStart, windowEnd);
-  if (flexible) return flexible;
+  const own = ownWindowLabel(windowStart, windowEnd);
+  if (own) return own;
   const start = slotStartOf(time);
   return start == null ? null : slotLabelFor(start);
 }

@@ -17,7 +17,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { nextDateForWeekday } from "@/lib/transportRequests";
 import { isPetDeceased } from "@/lib/petDeceased";
-import { boardingClashes, dubaiToday } from "@/lib/transportSchedule";
+import { HALF_PAST_STARTS, WINDOW_LENGTH_MIN, boardingClashes, dubaiToday, ownWindowLabel } from "@/lib/transportSchedule";
 import { SHORT_DAYS, dayDate, nextDay, shortDate } from "@/lib/transportRequests";
 import { useSameDayConflicts } from "@/hooks/useTransport";
 import { HubOfferTimes, type AcceptedOffer } from "@/components/transport/HubOfferTimes";
@@ -75,7 +75,10 @@ export function RequestForm({
   const [directions, setDirections] = useState<Direction[]>(["pickup"]);
   const [serviceDates, setServiceDates] = useState<string[]>([today]);
   const [weekdays, setWeekdays] = useState<string[]>([]);
+  // A slot id, or "<slot id>@<minute>" for a half-past one-off (9:30–10:30 in the 9–10 slot).
   const [slotByDirection, setSlotByDirection] = useState<Partial<Record<Direction, string>>>({});
+  const slotIdOf = (value: string | undefined) => (value ? value.split("@")[0] : null);
+  const halfPastOf = (value: string | undefined) => (value?.includes("@") ? Number(value.split("@")[1]) : null);
   // An offer from the transport hub a person accepted (AE OfferList "Accept"), per way.
   const [acceptedByDirection, setAcceptedByDirection] = useState<Partial<Record<Direction, AcceptedOffer>>>({});
   // Times the hub offered that nobody accepted yet: saved, the request waits in the Inbox as Offered.
@@ -270,7 +273,13 @@ export function RequestForm({
       const noPin = !isCancellation && !isPause && !ownerHasPin && !hasOwnLocation;
       const legFields = {
         direction,
-        requested_slot_id: !isCancellation && !isPause ? slotByDirection[direction] || null : null,
+        requested_slot_id: !isCancellation && !isPause ? slotIdOf(slotByDirection[direction]) : null,
+        // A half-past trip keeps its own one-hour window (AE's custom window); a new regular
+        // carries it onto the regular when approved (transport_request_decide).
+        ...(() => {
+          const half = !isCancellation && !isPause ? halfPastOf(slotByDirection[direction]) : null;
+          return half != null ? { window_start_min: half, window_end_min: half + WINDOW_LENGTH_MIN } : {};
+        })(),
         location_text: allowsLocation && loc.enabled ? loc.text.trim() : null,
         location_lat: hasOwnLocation ? loc.pin.pin!.lat : null,
         location_lng: hasOwnLocation ? loc.pin.pin!.lng : null,
@@ -719,11 +728,19 @@ export function RequestForm({
                   <SelectValue placeholder="No time yet" />
                 </SelectTrigger>
                 <SelectContent>
-                  {slotsFor(o.value).map((slot) => (
+                  {slotsFor(o.value).flatMap((slot) => [
                     <SelectItem key={slot.id} value={slot.id}>
                       {slot.label}
-                    </SelectItem>
-                  ))}
+                    </SelectItem>,
+                    // Any trip can start half past: a one-hour window inside AE's hour slots.
+                    ...(HALF_PAST_STARTS.includes(slot.start_min + 30)
+                      ? [
+                          <SelectItem key={`${slot.id}@30`} value={`${slot.id}@${slot.start_min + 30}`}>
+                            {ownWindowLabel(slot.start_min + 30, slot.start_min + 30 + WINDOW_LENGTH_MIN)}
+                          </SelectItem>,
+                        ]
+                      : []),
+                  ])}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">Leave blank if they have not said. It saves without one.</p>
@@ -733,7 +750,7 @@ export function RequestForm({
                   petId={selectedPetIds.length === 1 ? selectedPetIds[0] : null}
                   date={offerWeekly ? offerDate : datesChosen.length === 1 ? datesChosen[0] : null}
                   direction={o.value}
-                  askedStartMin={slotsFor(o.value).find((s) => s.id === slotByDirection[o.value])?.start_min ?? null}
+                  askedStartMin={slotsFor(o.value).find((s) => s.id === slotIdOf(slotByDirection[o.value]))?.start_min ?? null}
                   accepted={acceptedByDirection[o.value] ?? null}
                   onQuoted={(q) => setQuotedByDirection((prev) => ({ ...prev, [o.value]: q ?? undefined }))}
                   onAccept={(offer) => {

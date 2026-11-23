@@ -28,7 +28,13 @@ import {
 } from "@/hooks/useTransport";
 import { nextDateForWeekday } from "@/lib/transportRequests";
 import { isPetDeceased } from "@/lib/petDeceased";
-import { dubaiToday } from "@/lib/transportSchedule";
+import { HALF_PAST_STARTS, WINDOW_LENGTH_MIN, dubaiToday, ownWindowLabel } from "@/lib/transportSchedule";
+
+/** A one-off's time as the editor holds it: the slot id, or "<slot id>@<minute>" when it starts half past. */
+const timeValueOf = (r: { requested_slot_id: string | null; window_start_min?: number | null; purpose?: string | null }) =>
+  r.requested_slot_id && r.purpose === "regular" && r.window_start_min != null
+    ? `${r.requested_slot_id}@${r.window_start_min}`
+    : r.requested_slot_id ?? "";
 import {
   REJECT_REASONS,
   SHORT_DAYS,
@@ -139,7 +145,7 @@ function DetailBody({
   const { data: ownerPets = [] } = usePets(ownerId);
 
   useEffect(() => {
-    setSlotById(Object.fromEntries(rows.map((r) => [r.id, r.requested_slot_id ?? ""])));
+    setSlotById(Object.fromEntries(rows.map((r) => [r.id, timeValueOf(r)])));
     setDateById(Object.fromEntries(rows.map((r) => [r.id, r.service_date ?? ""])));
   }, [rows]);
 
@@ -152,7 +158,7 @@ function DetailBody({
     petsChanged ||
     branchId !== card.branchId ||
     note.trim() !== (rows.map((r) => r.notes).find((n) => n?.trim()) ?? "").trim() ||
-    rows.some((r) => (slotById[r.id] ?? "") !== (r.requested_slot_id ?? "") || (dateById[r.id] ?? "") !== (r.service_date ?? ""));
+    rows.some((r) => (slotById[r.id] ?? "") !== timeValueOf(r) || (dateById[r.id] ?? "") !== (r.service_date ?? ""));
 
   const saveEdits = async () => {
     try {
@@ -167,7 +173,14 @@ function DetailBody({
           ids: [r.id],
           patch: {
             ...common,
-            requested_slot_id: slotById[r.id] || null,
+            requested_slot_id: (slotById[r.id] ?? "").split("@")[0] || null,
+            // A home trip's own window follows the time picked: half past = that hour, else none.
+            ...(r.purpose === "regular" && (r.service_date || r.kind === "new_recurring")
+              ? (() => {
+                  const half = (slotById[r.id] ?? "").includes("@") ? Number(slotById[r.id].split("@")[1]) : null;
+                  return { window_start_min: half, window_end_min: half != null ? half + WINDOW_LENGTH_MIN : null };
+                })()
+              : {}),
             ...(r.service_date ? { service_date: dateById[r.id] || r.service_date } : {}),
           },
         });
@@ -442,15 +455,28 @@ function DetailBody({
                         <SelectValue placeholder="No time yet" />
                       </SelectTrigger>
                       <SelectContent>
-                        {slotsFor(r.direction).map((s) => (
+                        {slotsFor(r.direction).flatMap((s) => [
                           <SelectItem key={s.id} value={s.id}>
                             {s.label}
-                          </SelectItem>
-                        ))}
+                          </SelectItem>,
+                          ...(r.purpose === "regular" && (r.service_date || r.kind === "new_recurring") && HALF_PAST_STARTS.includes(s.start_min + 30)
+                            ? [
+                                <SelectItem key={`${s.id}@30`} value={`${s.id}@${s.start_min + 30}`}>
+                                  {ownWindowLabel(s.start_min + 30, s.start_min + 30 + WINDOW_LENGTH_MIN)}
+                                </SelectItem>,
+                              ]
+                            : []),
+                        ])}
                       </SelectContent>
                     </Select>
                   ) : (
-                    <span className="text-muted-foreground">{r.transport_slots?.label ?? "No time set"}</span>
+                    <span className="text-muted-foreground">
+                      {(r.purpose === "regular" && r.window_start_min != null && r.window_end_min != null
+                        ? ownWindowLabel(r.window_start_min, r.window_end_min)
+                        : null) ??
+                        r.transport_slots?.label ??
+                        "No time set"}
+                    </span>
                   ))}
                 {r.location_text && <span className="text-xs text-muted-foreground">at {r.location_text}</span>}
                 {r.status !== card.status && (

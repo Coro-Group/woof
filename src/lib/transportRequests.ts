@@ -1,3 +1,4 @@
+import { ownWindowLabel } from "@/lib/transportSchedule";
 /**
  * Transport requests as admin-essentials (AE) shows them.
  *
@@ -40,6 +41,7 @@ export type RequestRowLike = {
   needs_review?: boolean | null;
   review_reason?: string | null;
   window_start_min?: number | null;
+  window_end_min?: number | null;
   owners?: { first_name: string; last_name: string | null; phone?: string | null } | null;
   transport_request_pet?: { pet_id: string; pets: { name: string } | null }[];
   transport_slots?: { label: string; start_min: number; end_min: number } | null;
@@ -169,6 +171,9 @@ export function groupRequests<R extends RequestRowLike>(rows: R[]): RequestCard<
 }
 
 function slotText<R extends RequestRowLike>(card: RequestCard<R>, direction: "pickup" | "dropoff"): string | null {
+  // A half-past home trip shows its own one-hour window ("9:30–10:30 AM").
+  const own = card.rows.find((r) => r.direction === direction && r.purpose === "regular" && r.window_start_min != null && r.window_end_min != null);
+  if (own) return ownWindowLabel(own.window_start_min!, own.window_end_min!);
   return card.rows.find((r) => r.direction === direction && r.transport_slots)?.transport_slots?.label ?? null;
 }
 

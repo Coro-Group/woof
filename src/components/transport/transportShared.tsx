@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { ownerDisplayName } from "@/lib/bookingUtils";
 import { mapsUrl, pinAreaLabel } from "@/lib/transportPin";
-import { BADGE_LABEL, SOURCE_LABEL, directionLabel, flexibleWindowLabel, type StopBadge } from "@/lib/transportSchedule";
+import { BADGE_LABEL, SOURCE_LABEL, directionLabel, ownWindowLabel, type StopBadge } from "@/lib/transportSchedule";
 import { clock12 } from "@/lib/transportVetVisit";
 import { dayDate } from "@/lib/transportRequests";
 import { useCurrentStaffName, useSaveDayNote, useUpdateTransportRequestRows, type BoardStop } from "@/hooks/useTransport";
@@ -315,8 +315,8 @@ export function StopCard({
   const lng = stop.locationLng ?? owner?.pin_lng;
   const vet = vetLine(stop);
   const transfer = useTransferLabel(stop.transferFromBranchId, stop.transferToBranchId);
-  // A regular's wider window (AE custom window): "flexible 6:00 AM – 9:00 AM".
-  const flexible = stop.source === "regular" ? flexibleWindowLabel(stop.windowStartMin, stop.windowEndMin) : null;
+  // A trip's own one-hour window (AE custom window): "9:30–10:30 AM". Vet legs say theirs in vetLine.
+  const flexible = stop.purpose !== "vet" && stop.purpose !== "transfer" ? ownWindowLabel(stop.windowStartMin, stop.windowEndMin) : null;
   return (
     <div
       className={cn("rounded-md border bg-card p-2.5 text-sm space-y-1", stop.struck && "opacity-60")}

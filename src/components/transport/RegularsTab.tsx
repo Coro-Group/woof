@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Clock, Loader2, Pause, Play, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Plus } from "lucide-react";
 import { useBranch } from "@/contexts/BranchContext";
 import { usePets } from "@/hooks/usePets";
 import {
@@ -20,15 +20,18 @@ import { ownerDisplayName } from "@/lib/bookingUtils";
 import { isPetDeceased } from "@/lib/petDeceased";
 import { safeFormatDate } from "@/lib/safeDates";
 import {
-  NO_SLOT_LABEL,
-  WEEKDAY_LABELS,
   dubaiToday,
+  NO_SLOT_LABEL,
+  oneHourWindow,
+  ownWindowLabel,
   pausedLabel,
   regularPausedOn,
   runSlotLabel,
   shiftIsoDate,
   slotStartOf,
-  slotTime,
+  slotTimeForWindow,
+  timeChoices,
+  WEEKDAY_LABELS,
   weekdayOf,
 } from "@/lib/transportSchedule";
 import { CapacityHeatMap, HouseholdWeekSheet } from "@/components/transport/RegularsWeekViews";
@@ -73,7 +76,7 @@ function inForce(r: Pick<TransportRegular, "starts_on" | "ends_on">, date: strin
 
 const covers = (r: Pick<TransportRegular, "direction">, dir: Direction) => r.direction === dir || r.direction === "both";
 
-/** The label a regular's direction shows: its flexible window, else its hour slot. */
+/** The label a regular's direction shows: its own one-hour window, else its hour slot. */
 function regularSlotLabel(r: TransportRegular, dir: Direction): string {
   return (
     (dir === "pickup"
@@ -487,7 +490,6 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
   const branchName = useBranchName();
   const [, setSearchParams] = useSearchParams();
   const [pending, setPending] = useState<{ weekday: number; direction: Direction; value: string; from: string | null; to: string | null } | null>(null);
-  const [windowOf, setWindowOf] = useState<TransportRegular | null>(null);
   const [pauseOpen, setPauseOpen] = useState(false);
 
   const petRows = regulars.filter((r) => r.pet_id === petId);
@@ -504,12 +506,20 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
   const transferTo = petRows.find((r) => inForce(r, today))?.transfer_to_branch_id ?? null;
   const pausedRows = petRows.filter((r) => pausedLabel(r, today));
 
+  // A value is the minute the trip starts: an hour slot ("540") or half past ("570" = 9:30–10:30).
   const slotValue = (r: TransportRegular | null, dir: Direction) => {
     if (!r) return NONE;
+    const own = dir === "pickup" ? r.pickup_window_start_min : r.dropoff_window_start_min;
+    if (own != null) return String(own);
     const start = slotStartOf(dir === "pickup" ? r.pickup_time : r.dropoff_time);
     return start == null ? NONE : String(start);
   };
-  const slotName = (value: string) => (value === NONE ? null : slots.find((s) => String(s.start_min) === value)?.label ?? value);
+  const slotName = (value: string) => {
+    if (value === NONE) return null;
+    const start = Number(value);
+    if (start % 60 !== 0) return ownWindowLabel(...oneHourWindow(start));
+    return slots.find((s) => s.start_min === start)?.label ?? value;
+  };
 
   const ask = (weekday: number, dir: Direction, value: string) => {
     const existing = activeFor(weekday, dir);
@@ -526,13 +536,16 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
 
   const apply = (p: NonNullable<typeof pending>) => {
     if (!homeBranch) return toast.error("Pick a branch first");
-    const time = p.value === NONE ? null : slotTime(Number(p.value));
+    const start = p.value === NONE ? null : Number(p.value);
+    const time = start == null ? null : slotTimeForWindow(start);
+    const window = start != null && start % 60 !== 0 ? oneHourWindow(start) : null;
     change.mutate(
       {
         existing: rowFor(p.weekday),
         base: { branch_id: homeBranch, owner_id: ownerId, pet_id: petId, weekday: p.weekday, transfer_to_branch_id: transferTo },
         direction: p.direction,
         time,
+        window,
         today,
         yesterday: shiftIsoDate(today, -1),
         actor: staffName ?? "Staff",
@@ -618,11 +631,6 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
                   const rule = activeFor(day, dir);
                   const upcoming = upcomingFor(day, dir);
                   const leg = rule ? transferLeg(rule, dir, branchName) : null;
-                  const flexible = rule
-                    ? dir === "pickup"
-                      ? rule.pickup_window_start_min != null
-                      : rule.dropoff_window_start_min != null
-                    : false;
                   return (
                     <td key={dir} className="p-2 space-y-1">
                       <div className="flex items-center gap-1.5">
@@ -632,26 +640,13 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value={NONE}>No transport</SelectItem>
-                            {slots
-                              .filter((s) => s.direction === dir)
-                              .map((s) => (
-                                <SelectItem key={s.id} value={String(s.start_min)}>
-                                  {s.label}
-                                </SelectItem>
-                              ))}
+                            {timeChoices(slots.filter((s) => s.direction === dir)).map((c) => (
+                              <SelectItem key={c.startMin} value={String(c.startMin)}>
+                                {c.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
-                        {rule && (
-                          <button
-                            type="button"
-                            className={flexible ? TONE.info.text : "text-muted-foreground hover:text-foreground"}
-                            title="Flexible window — the wider time the owner is happy with"
-                            onClick={() => setWindowOf(rule)}
-                            data-testid="transport-regular-window-btn"
-                          >
-                            <Clock className="h-3.5 w-3.5" />
-                          </button>
-                        )}
                       </div>
                       {leg && (
                         <Badge variant="outline" className={`text-[10px] ${TRANSFER_BADGE}`}>
@@ -727,7 +722,6 @@ function WeekEditor({ ownerId, petId, petName }: { ownerId: string; petId: strin
         </AlertDialogContent>
       </AlertDialog>
 
-      <FlexibleWindowDialog regular={windowOf} onClose={() => setWindowOf(null)} />
       <PauseDialog rows={pauseOpen ? petRows.filter((r) => inForce(r, today)) : null} onClose={() => setPauseOpen(false)} />
     </div>
   );
@@ -759,106 +753,13 @@ function RuleHistory({ rows, branchName }: { rows: TransportRegular[]; branchNam
   );
 }
 
-const toHHMM = (min: number | null | undefined) =>
-  min == null ? "" : `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
-const toMin = (hhmm: string) => {
-  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
-  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-};
-
-/**
- * A regular's own window, per direction (AE's custom window): "any time 6–9 AM". Set
- * only on purpose — without one, the booked hour slot is the window. Blank both ends
- * to go back to the slot.
- */
-function FlexibleWindowDialog({ regular, onClose }: { regular: TransportRegular | null; onClose: () => void }) {
-  const update = useUpdateTransportRegular();
-  const [draft, setDraft] = useState({ puFrom: "", puTo: "", doFrom: "", doTo: "" });
-
-  useEffect(() => {
-    if (!regular) return;
-    setDraft({
-      puFrom: toHHMM(regular.pickup_window_start_min),
-      puTo: toHHMM(regular.pickup_window_end_min),
-      doFrom: toHHMM(regular.dropoff_window_start_min),
-      doTo: toHHMM(regular.dropoff_window_end_min),
-    });
-  }, [regular]);
-
-  const leg = (from: string, to: string, label: string): [number | null, number | null] | string => {
-    if (!from && !to) return [null, null];
-    const a = toMin(from);
-    const b = toMin(to);
-    if (a == null || b == null) return `Enter both a from and an until time for the ${label}, or neither.`;
-    if (b <= a) return `The ${label} window has to end after it starts.`;
-    if (b - a < 30) return `Make the ${label} window at least 30 minutes.`;
-    return [a, b];
-  };
-
-  const save = () => {
-    if (!regular) return;
-    const none: [null, null] = [null, null];
-    const pu = regular.direction !== "dropoff" ? leg(draft.puFrom, draft.puTo, "pickup") : none;
-    const dr = regular.direction !== "pickup" ? leg(draft.doFrom, draft.doTo, "drop-off") : none;
-    if (typeof pu === "string") return toast.error(pu);
-    if (typeof dr === "string") return toast.error(dr);
-    update.mutate(
-      {
-        id: regular.id,
-        pickup_window_start_min: pu[0],
-        pickup_window_end_min: pu[1],
-        dropoff_window_start_min: dr[0],
-        dropoff_window_end_min: dr[1],
-      },
-      {
-        onSuccess: () => {
-          toast.success("Window saved");
-          onClose();
-        },
-        onError: (err) => toast.error(err.message || "Couldn't save the window"),
-      },
-    );
-  };
-
-  const row = (label: string, from: "puFrom" | "doFrom", to: "puTo" | "doTo", booked: string | null) => (
-    <div className="space-y-1">
-      <Label className="text-xs">
-        {label}
-        {booked ? ` · booked ${runSlotLabel(booked)}` : ""}
-      </Label>
-      <div className="flex items-center gap-2">
-        <Input type="time" value={draft[from]} onChange={(e) => setDraft((d) => ({ ...d, [from]: e.target.value }))} />
-        <span className="text-xs text-muted-foreground">until</span>
-        <Input type="time" value={draft[to]} onChange={(e) => setDraft((d) => ({ ...d, [to]: e.target.value }))} />
-      </div>
-    </div>
-  );
-
-  return (
-    <Dialog open={!!regular} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-sm" data-testid="transport-regular-window-dialog">
-        <DialogHeader>
-          <DialogTitle>Flexible window{regular ? ` · ${WEEKDAY_LABELS[regular.weekday]}` : ""}</DialogTitle>
-        </DialogHeader>
-        <p className="text-xs text-muted-foreground">
-          Only when the owner is happy with more than the hour they booked (booked 06-07AM, fine until 9). Leave blank to
-          keep the booked hour.
-        </p>
-        <div className="space-y-3">
-          {regular?.direction !== "dropoff" && row("Pickup", "puFrom", "puTo", regular?.pickup_time ?? null)}
-          {regular?.direction !== "pickup" && row("Dropoff", "doFrom", "doTo", regular?.dropoff_time ?? null)}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={update.isPending} data-testid="transport-regular-window-save">
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+/** A half-past time's one-hour window for one direction of a new regular; none on the hour. */
+function halfPastWindow(dir: "pickup" | "dropoff", value: string) {
+  const start = value ? Number(value) : null;
+  const w = start != null && start % 60 !== 0 ? oneHourWindow(start) : null;
+  return dir === "pickup"
+    ? { pickup_window_start_min: w?.[0] ?? null, pickup_window_end_min: w?.[1] ?? null }
+    : { dropoff_window_start_min: w?.[0] ?? null, dropoff_window_end_min: w?.[1] ?? null };
 }
 
 function PauseDialog({ rows, onClose }: { rows: TransportRegular[] | null; onClose: () => void }) {
@@ -979,8 +880,11 @@ export function NewRegularDialog({
         pet_id,
         weekday,
         direction,
-        pickup_time: direction !== "dropoff" && pickupSlot ? slotTime(Number(pickupSlot)) : null,
-        dropoff_time: direction !== "pickup" && dropoffSlot ? slotTime(Number(dropoffSlot)) : null,
+        // On the hour, or half past: booked in that hour's slot with a one-hour window.
+        pickup_time: direction !== "dropoff" && pickupSlot ? slotTimeForWindow(Number(pickupSlot)) : null,
+        dropoff_time: direction !== "pickup" && dropoffSlot ? slotTimeForWindow(Number(dropoffSlot)) : null,
+        ...halfPastWindow("pickup", direction !== "dropoff" ? pickupSlot : ""),
+        ...halfPastWindow("dropoff", direction !== "pickup" ? dropoffSlot : ""),
         transfer_to_branch_id: route === "home" ? null : route,
         starts_on: startsOn,
         notes: notes.trim() || null,
@@ -1002,13 +906,11 @@ export function NewRegularDialog({
         <SelectValue placeholder="Hour" />
       </SelectTrigger>
       <SelectContent>
-        {slots
-          .filter((s) => s.direction === dir)
-          .map((s) => (
-            <SelectItem key={s.id} value={String(s.start_min)}>
-              {s.label}
-            </SelectItem>
-          ))}
+        {timeChoices(slots.filter((s) => s.direction === dir)).map((c) => (
+          <SelectItem key={c.startMin} value={String(c.startMin)}>
+            {c.label}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );

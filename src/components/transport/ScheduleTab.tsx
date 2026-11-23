@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ChevronLeft, ChevronRight, MapPin, Printer, StickyNote } from "lucide-react";
+import { format } from "date-fns";
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, MapPin, Printer, StickyNote } from "lucide-react";
 import { useBranch } from "@/contexts/BranchContext";
 import { useDayNotes, useTransportDay, type BoardStop } from "@/hooks/useTransport";
 import { ownerDisplayName } from "@/lib/bookingUtils";
@@ -23,6 +24,8 @@ import {
 import { VaccineStatusBadge } from "@/components/VaccineStatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -35,6 +38,7 @@ export function ScheduleTab() {
   const today = dubaiToday();
   const [date, setDate] = useState(today);
   const [branch, setBranch] = useState<BranchFilter>("all");
+  const [pickerOpen, setPickerOpen] = useState(false);
   // Null asks for every branch, which only someone free to see them all may do.
   const scope = branchLocked ? homeBranchId : branch === "all" ? null : branch;
   const { data: all = [], isLoading, error } = useTransportDay(date, scope);
@@ -82,6 +86,27 @@ export function ScheduleTab() {
             <Button variant="outline" size="icon" aria-label="Next day" onClick={() => setDate(shiftIsoDate(date, 1))}>
               <ChevronRight className="h-4 w-4" />
             </Button>
+            {/* Jump straight to a day instead of stepping one arrow-click at a time. */}
+            <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="Pick a date">
+                  <CalendarDays className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={new Date(`${date}T12:00:00`)}
+                  defaultMonth={new Date(`${date}T12:00:00`)}
+                  onSelect={(d) => {
+                    if (!d) return;
+                    setDate(format(d, "yyyy-MM-dd"));
+                    setPickerOpen(false);
+                  }}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
             <Button variant="outline" size="sm" disabled={date === today} onClick={() => setDate(today)}>
               Today
             </Button>

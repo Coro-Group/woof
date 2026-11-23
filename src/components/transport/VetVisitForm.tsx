@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useBranch } from "@/contexts/BranchContext";
 import { useOwner, useOwners } from "@/hooks/useOwners";
 import { usePets } from "@/hooks/usePets";
-import { useCurrentStaffName } from "@/hooks/useTransport";
+import { useCurrentStaffName, useTransportHubStatus } from "@/hooks/useTransport";
 import { useSaveVetClinic, useTransportVetClinics, useWriteVetVisit } from "@/hooks/useTransportVet";
 import { isPetDeceased } from "@/lib/petDeceased";
 import { dubaiToday } from "@/lib/transportSchedule";
@@ -22,6 +22,8 @@ import {
 } from "@/lib/transportVetVisit";
 import { PinField, emptyPin, pinReady, type PinDraft } from "@/components/transport/PinField";
 import { PinBadge, dipFirst } from "@/components/transport/transportShared";
+import { TransportProfileStep } from "@/components/transport/TransportProfileStep";
+import { VetLegTimes, vetLegPlans, type VetLegChoice } from "@/components/transport/VetLegTimes";
 import { VaccineStatusBadge } from "@/components/VaccineStatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -37,7 +39,8 @@ const NEW_CLINIC = "__new__";
  * Book a pet from the branch to a vet appointment and (usually) back — AE's
  * VetVisitForm. The legs are worked out from the appointment, the arrive-early buffer
  * and how long the pet stays; anything not known yet (the vet's call) is set from the
- * Desk later.
+ * Desk later. Every trip that can be priced now is checked against the vans first (Van
+ * times), and the pets need a transport profile for that (23 Nov 2026).
  */
 export function VetVisitForm({ onSaved }: { onSaved?: () => void }) {
   const today = dubaiToday();
@@ -110,7 +113,22 @@ export function VetVisitForm({ onSaved }: { onSaved?: () => void }) {
   const needsPin = newClinic || (!!chosen && (chosen.lat == null || chosen.lng == null));
   const clinicReady = newClinic ? !!clinicName.trim() && pinReady(clinicPin) : !!chosen && (!needsPin || pinReady(clinicPin));
   const homeNeedsPin = returnTo === "home" && owner?.id === ownerId && owner?.pin_lat == null;
-  const canSave = !!ownerId && !!branchId && selectedPetIds.length > 0 && clinicReady && !!draft.input && !write.isPending;
+  // Van times (23 Nov 2026): the trips priced before booking, and what was chosen for each.
+  const hub = useTransportHubStatus();
+  const hubOn = !!hub.data?.enabled && !!hub.data?.configured && hub.data?.hub?.enabled === true;
+  const clinicPlace = newClinic || needsPin
+    ? (pinReady(clinicPin) ? { label: newClinic ? clinicName.trim() || "Vet clinic" : chosen?.name ?? "Vet clinic", lat: clinicPin.pin!.lat, lng: clinicPin.pin!.lng } : null)
+    : chosen && chosen.lat != null && chosen.lng != null ? { label: chosen.name, lat: chosen.lat, lng: chosen.lng } : null;
+  const vetPlans = draft.plan ? vetLegPlans(draft.plan.legs, clinicPlace, clockOf) : [];
+  const vetPlanKey = JSON.stringify([selectedPetIds, vetPlans, branchId]);
+  const [vetChoices, setVetChoices] = useState<Partial<Record<string, VetLegChoice>>>({});
+  const [vetReady, setVetReady] = useState(false);
+  const selectedPets = pets.filter((p) => selectedPetIds.includes(p.id));
+  const missingProfile = selectedPets.filter((p) => !p.voltlines_passenger_id);
+  const timesNeeded = hubOn && vetPlans.length > 0;
+  const canSave =
+    !!ownerId && !!branchId && selectedPetIds.length > 0 && clinicReady && !!draft.input && !write.isPending &&
+    (!timesNeeded || (missingProfile.length === 0 && vetReady));
 
   const reset = () => {
     setOwnerSearch("");
@@ -152,6 +170,7 @@ export function VetVisitForm({ onSaved }: { onSaved?: () => void }) {
         notes: notes.trim() || null,
         input: draft.input,
         actor: staffName ?? "Staff",
+        ...(timesNeeded ? { promises: vetChoices } : {}),
       });
       toast.success(
         result.pending ? `Vet visit booked — ${pendingLabel(result.pending)?.toLowerCase()}; set it from the Desk` : "Vet visit booked",
@@ -373,6 +392,31 @@ export function VetVisitForm({ onSaved }: { onSaved?: () => void }) {
       </div>
 
       <VetVisitPreview error={time ? draft.error : null} plan={draft.plan} />
+
+      {timesNeeded && ownerId && missingProfile.length > 0 && (
+        <TransportProfileStep
+          ownerId={ownerId}
+          ownerName={ownerLabel || "the client"}
+          address={owner?.id === ownerId ? owner.address ?? null : null}
+          pinLat={owner?.id === ownerId ? owner.pin_lat ?? null : null}
+          pinLng={owner?.id === ownerId ? owner.pin_lng ?? null : null}
+          pets={selectedPets.map((p) => ({ id: p.id, name: p.name, voltlines_passenger_id: p.voltlines_passenger_id ?? null }))}
+        />
+      )}
+      {timesNeeded && missingProfile.length === 0 && (
+        <VetLegTimes
+          petId={selectedPetIds[0] ?? null}
+          legs={vetPlans}
+          planKey={vetPlanKey}
+          onChange={(choices, ready) => {
+            setVetChoices(choices);
+            setVetReady(ready);
+          }}
+        />
+      )}
+      {timesNeeded && missingProfile.length === 0 && !vetReady && (
+        <p className="text-xs text-muted-foreground">Check van times and choose one for each trip before booking.</p>
+      )}
 
       <Button className="w-full" disabled={!canSave} onClick={save} data-testid="transport-vet-save">
         {write.isPending || saveClinicMutation.isPending ? (

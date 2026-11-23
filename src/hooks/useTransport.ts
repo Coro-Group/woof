@@ -709,6 +709,8 @@ export function useTransportHubQuote() {
       location?: { label: string; lat: number; lng: number };
       /** new_recurring: quoted against the Master base for the weekday of `date`. */
       kind?: "one_off" | "new_recurring";
+      /** A vet leg: AE keeps only times that reach the clinic by deadlineMin, or collect after readyMin. */
+      vet?: { deadlineMin?: number; readyMin?: number; windowStartMin?: number; windowEndMin?: number };
     }) => hubApi<HubQuote>({ method: "POST", body: JSON.stringify({ op: "quote", ...input }) }),
   });
 }

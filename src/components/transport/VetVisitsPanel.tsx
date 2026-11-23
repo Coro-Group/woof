@@ -1,20 +1,23 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Loader2, Stethoscope } from "lucide-react";
 import { toast } from "sonner";
-import { useCurrentStaffName } from "@/hooks/useTransport";
+import { useCurrentStaffName, useTransportHubStatus } from "@/hooks/useTransport";
 import { useOpenVetVisits, useSetVetVisitStatus, useWriteVetVisit, type VetVisitWithDetails } from "@/hooks/useTransportVet";
 import { dubaiToday } from "@/lib/transportSchedule";
 import {
   RETURN_TO_LABEL,
   VISIT_MODE_LABEL,
   clock12,
+  clockOf,
   legsForVisit,
+  normaliseVisit,
   pendingLabel,
   timeToMinutes,
   visitFromRow,
   type VetVisitInput,
 } from "@/lib/transportVetVisit";
 import { BranchBadge } from "@/components/transport/transportShared";
+import { VetLegTimes, vetLegPlans, type VetLegChoice } from "@/components/transport/VetLegTimes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,6 +81,50 @@ function VetVisitRowCard({ row }: { row: VetVisitWithDetails }) {
   const actor = staffName ?? "Staff";
   const busy = write.isPending || setStatus.isPending;
 
+  /*
+   * The way back, priced before it goes on the board (23 Nov 2026): the trips the vet's
+   * call makes known — back from the clinic after the pet is ready, and home — are
+   * checked against the vans like any other request.
+   */
+  const hub = useTransportHubStatus();
+  const hubOn = !!hub.data?.enabled && !!hub.data?.configured && hub.data?.hub?.enabled === true;
+  const candidate = useMemo((): VetVisitInput | null => {
+    const input: VetVisitInput = { ...visit };
+    if (pending === "ready_time" || pending === "return_date") {
+      const m = timeToMinutes(ready);
+      if (m == null) return null;
+      input.readyTimeMin = m;
+      if (row.visit_mode === "admitted") {
+        if (!date) return null;
+        input.returnDate = date;
+      }
+    }
+    if (pending === "home_window") {
+      const start = timeToMinutes(homeStart);
+      const end = timeToMinutes(homeEnd);
+      if (start == null || end == null) return null;
+      input.homeWindowStartMin = start;
+      input.homeWindowEndMin = end;
+    }
+    return input;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, date, homeStart, homeEnd, pending, row.id]);
+  const clinicPlace = row.vet_lat != null && row.vet_lng != null ? { label: row.vet_label, lat: row.vet_lat, lng: row.vet_lng } : null;
+  const newPlans = useMemo(() => {
+    if (!candidate || !pending) return [];
+    try {
+      const after = legsForVisit(normaliseVisit(candidate)).legs;
+      const before = new Set(legsForVisit(visit).legs.map((l) => l.role));
+      return vetLegPlans(after.filter((l) => !before.has(l.role)), clinicPlace, clockOf);
+    } catch {
+      return [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidate, pending, row.id]);
+  const [choices, setChoices] = useState<Partial<Record<string, VetLegChoice>>>({});
+  const [timesReady, setTimesReady] = useState(false);
+  const timesNeeded = hubOn && newPlans.length > 0;
+
   const changeStatus = (status: "at_vet" | "returned" | "cancelled") =>
     setStatus.mutate(
       { id: row.id, status, actor },
@@ -117,6 +164,7 @@ function VetVisitRowCard({ row }: { row: VetVisitWithDetails }) {
         notes: row.notes,
         input,
         actor,
+        ...(timesNeeded ? { promises: choices } : {}),
       },
       {
         onSuccess: (r) => toast.success(r.pending ? `Saved — ${pendingLabel(r.pending)?.toLowerCase()}` : "The way back is on the board"),
@@ -179,11 +227,22 @@ function VetVisitRowCard({ row }: { row: VetVisitWithDetails }) {
                 <Input type="time" className="h-8 w-28" value={homeEnd} onChange={(e) => setHomeEnd(e.target.value)} aria-label="Home until" />
               </>
             )}
-            <Button size="sm" className="h-8" disabled={busy} onClick={saveReturn} data-testid="transport-vet-set-return">
+            <Button size="sm" className="h-8" disabled={busy || (timesNeeded && !timesReady)} onClick={saveReturn} data-testid="transport-vet-set-return">
               {write.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               Put the way back on the board
             </Button>
           </div>
+          {timesNeeded && (
+            <VetLegTimes
+              petId={row.pet_ids[0] ?? null}
+              legs={newPlans}
+              planKey={JSON.stringify(newPlans)}
+              onChange={(c, r) => {
+                setChoices(c);
+                setTimesReady(r);
+              }}
+            />
+          )}
         </div>
       )}
     </div>

@@ -101,7 +101,72 @@ export type VetVisitSave = {
   notes: string | null;
   input: VetVisitInput;
   actor: string;
+  /**
+   * The van time staff chose for each trip priced on the form (VetLegTimes), or "none"
+   * when no van could make it and it is booked for dispatch to arrange (23 Nov 2026).
+   */
+  promises?: Partial<Record<string, { kind: "offer"; startMin: number; eta: string | null } | { kind: "none"; reason: string }>>;
 };
+
+const minutesOfClock = (t: string | null) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+
+/**
+ * Record what was chosen on each trip the visit just wrote: the promised hour and the
+ * van's time, as Accept does on a request; or flag it for dispatch. Trips are matched
+ * to their role by way, date and place (the clinic or home).
+ */
+async function applyVetPromises(
+  visitId: string,
+  legRows: Array<{ role: string; direction: string; service_date: string; location_lat: number | null }>,
+  promises: NonNullable<VetVisitSave["promises"]>,
+  actor: string,
+) {
+  const roles = Object.keys(promises);
+  if (!roles.length) return;
+  const [{ data: rows, error }, { data: slots, error: slotErr }] = await Promise.all([
+    supabase
+      .from("transport_request")
+      .select("id, direction, service_date, location_lat, status")
+      .eq("vet_visit_id", visitId)
+      .not("status", "in", "(cancelled,rejected)"),
+    supabase.from("transport_slots").select("id, direction, start_min, end_min"),
+  ]);
+  if (error) throw error;
+  if (slotErr) throw slotErr;
+  for (const role of roles) {
+    const leg = legRows.find((l) => l.role === role);
+    const choice = promises[role];
+    if (!leg || !choice) continue;
+    const row = (rows ?? []).find(
+      (r) =>
+        r.direction === leg.direction &&
+        r.service_date === leg.service_date &&
+        (leg.location_lat == null ? r.location_lat == null : r.location_lat != null && Math.abs(r.location_lat - leg.location_lat) < 1e-6),
+    );
+    if (!row) continue;
+    const patch =
+      choice.kind === "offer"
+        ? (() => {
+            const slot = (slots ?? []).find((sl) => sl.direction === leg.direction && sl.start_min === choice.startMin) ?? null;
+            const eta = minutesOfClock(choice.eta);
+            return {
+              promised_slot_id: slot?.id ?? null,
+              promised_window_start_min: slot?.start_min ?? (eta != null ? Math.max(0, eta - 30) : null),
+              promised_window_end_min: slot?.end_min ?? (eta != null ? Math.min(1439, eta + 30) : null),
+              promised_eta_min: eta,
+              offered_by: actor,
+              offered_at: new Date().toISOString(),
+              updated_by: actor,
+            };
+          })()
+        : { needs_review: true, review_reason: `no van could make the vet time — dispatch to arrange (${choice.reason})`, updated_by: actor };
+    const { error: upErr } = await supabase.from("transport_request").update(patch).eq("id", row.id);
+    if (upErr) throw upErr;
+  }
+}
 
 /**
  * Book a visit or change its return: the rules (validation, which legs) run here with
@@ -146,6 +211,7 @@ export function useWriteVetVisit() {
         p_actor: s.actor,
       });
       if (error) throw error;
+      if (s.promises) await applyVetPromises(data as string, legRows, s.promises, s.actor);
       return { id: data as string, pending };
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["transport"] }),

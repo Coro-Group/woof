@@ -53,8 +53,17 @@ function requireSwitchedOn() {
   if (!hubConfigured()) throw new HttpError(503, "The transport hub address or secret is not set");
 }
 
-async function quote(db, body) {
-  const { petId, date, direction, startMin, location, kind } = body ?? {};
+/** The vet rule AE applies to a quote: numbers only. */
+function pickVet(v) {
+  const out = {};
+  for (const k of ["deadlineMin", "readyMin", "windowStartMin", "windowEndMin"]) {
+    if (Number.isInteger(v[k]) && v[k] >= 0 && v[k] <= 1439) out[k] = v[k];
+  }
+  return out;
+}
+
+async function quote(db, body, retried = false) {
+  const { petId, date, direction, startMin, location, kind, vet } = body ?? {};
   if (!petId || !/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? ""))) throw new HttpError(422, "petId and date are required");
   if (direction !== "pickup" && direction !== "dropoff") throw new HttpError(422, "direction must be pickup or dropoff");
   if (!Number.isInteger(startMin)) throw new HttpError(422, "startMin is required (the hour asked for)");
@@ -65,10 +74,18 @@ async function quote(db, body) {
   }
   // new_recurring: AE quotes it against the Master base for the weekday of `date`.
   const quoteKind = kind === "new_recurring" ? { kind: "new_recurring" } : {};
+  // A vet leg (23 Nov 2026): AE keeps only times that reach the clinic by the deadline,
+  // or collect after the pet is ready (api/_lib/transportVetQuote.js on AE).
+  const vetRule = vet && typeof vet === "object" ? { vet: pickVet(vet) } : {};
   try {
-    return await hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...quoteKind, ...(location ? { location } : {}) });
+    return await hubPost({ op: "quote", clientRef: `woof:pet:${petId}`, date, direction, startMin, ...quoteKind, ...vetRule, ...(location ? { location } : {}) });
   } catch (err) {
-    // A profile created moments ago is still on its way to the dispatch board.
+    // Not on the hub yet: a profile made moments ago, or a dog whose only transport is
+    // the vet visit being booked. Send it across once, then ask again.
+    if (err.status === 404 && !retried) {
+      await sync(db, [petId]);
+      return quote(db, body, true);
+    }
     if (err.status === 404) {
       throw new HttpError(409, "This dog's transport profile is still reaching the dispatch board — press Offer again in a few seconds.");
     }
@@ -76,7 +93,7 @@ async function quote(db, body) {
   }
 }
 
-async function sync(db) {
+async function sync(db, extraPetIds = []) {
   const from = dubaiToday();
   const to = addDays(from, SYNC_DAYS - 1);
   const { data: regulars, error: rErr } = await db.from("transport_regular").select("*").eq("is_active", true);
@@ -102,9 +119,11 @@ async function sync(db) {
     .in("status", ["received", "offered"])
     .in("kind", ["one_off", "new_recurring"]);
   if (oErr) throw new HttpError(500, oErr.message);
-  const openPets = (openReqs ?? [])
+  const openPets0 = (openReqs ?? [])
     .filter((r) => r.weekday != null || (r.service_date && r.service_date >= from))
     .flatMap((r) => (r.transport_request_pet ?? []).map((p) => ({ petId: p.pet_id })));
+  // A dog being quoted for something not saved yet (a vet visit) goes across too.
+  const openPets = [...openPets0, ...extraPetIds.map((petId) => ({ petId }))];
 
   const petIds = new Set((regulars ?? []).map((r) => r.pet_id));
   for (const o of openPets) if (o.petId) petIds.add(o.petId);

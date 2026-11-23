@@ -320,3 +320,6 @@ end $$;
 -- The endpoint address is set per project (Vault secret transport_hub_auto_url):
 --   select vault.create_secret('https://<app>/api/transport-hub', 'transport_hub_auto_url');
 -- Until it is set, kicks are counted but nothing is posted.
+
+-- New RPCs (claim / finish): PostgREST serves them only after a schema reload.
+notify pgrst, 'reload schema';

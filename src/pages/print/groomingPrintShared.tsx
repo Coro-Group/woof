@@ -2,6 +2,7 @@
 import { addMinutes, format, parse, parseISO } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { labelForGroomingService, type GroomingService } from "@/lib/groomingCatalog";
+import { formatTimeRange } from "@/lib/groomingBoardUi";
 import { ownerDisplayName } from "@/lib/bookingUtils";
 import {
   invoiceDisplayTotals,
@@ -358,7 +359,7 @@ export function GroomingSchedulePrintView({
                     const pickup = schedulePickupDisplay(a);
                     const dateLines = [
                       format(parseISO(a.appointment_date), "EEE, d MMM yyyy"),
-                      formatAppointmentTime(a.appointment_time),
+                      formatTimeRange(a.appointment_time, a.duration_minutes),
                       pickup ? `Pickup: ${pickup}` : null,
                     ].filter(Boolean) as string[];
 
@@ -431,7 +432,7 @@ export function GroomingCardBlock({
         </p>
         <p className="print-sans text-xs">
           {format(parseISO(appointment.appointment_date), "d MMM yyyy")} ·{" "}
-          {formatAppointmentTime(appointment.appointment_time)}
+          {formatTimeRange(appointment.appointment_time, appointment.duration_minutes)}
         </p>
         <p className="print-sans text-sm font-semibold">
           {packageLabel}

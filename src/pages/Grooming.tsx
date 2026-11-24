@@ -5,7 +5,6 @@ import {
   addDays,
   format,
   isValid,
-  parse,
   parseISO,
   subDays,
 } from "date-fns";
@@ -164,7 +163,14 @@ import {
 } from "@/lib/groomingCatalog";
 import { GroomingGroomerSelect } from "@/components/grooming/GroomingGroomerSelect";
 import { useGroomingGroomers } from "@/hooks/useGroomingGroomers";
-import { activeLinkedStayLabel } from "@/lib/groomingBoardUi";
+import {
+  activeLinkedStayLabel,
+  formatTimeRange,
+  groomingBoardPaymentBadgeClass,
+  groomingBoardPaymentLabel,
+  invoiceCoveredByPackage,
+  petSizeLabel,
+} from "@/lib/groomingBoardUi";
 
 const SERVICE_BADGE: Record<GroomingService, string> = {
   full_groom: "bg-purple-100 text-purple-800 border-purple-200",
@@ -287,17 +293,6 @@ function serviceLabel(s: GroomingService): string {
   return labelForGroomingService(s);
 }
 
-function formatApptTime(t: string | null): string {
-  if (!t) return "—";
-  const slice = t.length >= 8 ? t.slice(0, 8) : `${t}:00`.slice(0, 8);
-  try {
-    const base = parse(slice, "HH:mm:ss", new Date(2000, 0, 1));
-    return format(base, "h:mm a");
-  } catch {
-    return t;
-  }
-}
-
 function groomerDisplay(a: GroomingAppointmentWithJoins): string {
   if (a.grooming_notes?.trim()) return a.grooming_notes.trim();
   return "—";
@@ -319,10 +314,18 @@ function AppointmentCard({
   const petName = a.pets?.name ?? "—";
   const breedWeight = [
     a.pets?.breed,
+    petSizeLabel(a.pets?.size),
     a.pets?.weight_kg != null ? `${a.pets.weight_kg}kg` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const coveredByPackage = invoiceCoveredByPackage(a.invoices?.invoice_line_items);
+  const paymentLabel = groomingBoardPaymentLabel({
+    status: a.status,
+    payment_method: a.payment_method,
+    invoice_status: a.invoices?.status,
+    coveredByPackage,
+  });
 
   const duration = a.duration_minutes ?? 60;
   const { services: selectedServiceLabels } = parseGroomingMeta(a.notes);
@@ -349,7 +352,7 @@ function AppointmentCard({
               </Badge>
             </div>
             <p className="text-2xl font-semibold tabular-nums">
-              {formatApptTime(a.appointment_time)}
+              {formatTimeRange(a.appointment_time, duration)}
             </p>
             <Badge variant="outline" className="font-normal">
               {duration} min
@@ -438,15 +441,27 @@ function AppointmentCard({
             </p>
             <p className="text-xs text-muted-foreground">
               Payment:{" "}
-              <span className="text-foreground font-medium">
-                {groomingPaymentMethodLabel(a.payment_method)}
-              </span>
+              <Badge
+                variant="outline"
+                className={cn(
+                  "font-medium",
+                  groomingBoardPaymentBadgeClass({
+                    status: a.status,
+                    payment_method: a.payment_method,
+                    invoice_status: a.invoices?.status,
+                    coveredByPackage,
+                  }),
+                )}
+              >
+                {paymentLabel}
+              </Badge>
             </p>
             <p className="text-sm text-muted-foreground">
               Groomer:{" "}
               <span className="text-foreground font-medium">
                 {groomerDisplay(a)}
               </span>
+              {a.grooming_stations?.name ? ` · ${a.grooming_stations.name}` : ""}
             </p>
 
             <div className="flex flex-col gap-2 lg:items-end" onClick={(e) => e.stopPropagation()}>
@@ -1558,6 +1573,9 @@ const GroomingPage = () => {
                       value={editApptTime}
                       onChange={(e) => setEditApptTime(e.target.value)}
                     />
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {formatTimeRange(editApptTime, editDurationMin)}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>Station</Label>

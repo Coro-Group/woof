@@ -4,7 +4,6 @@ import {
   activeLinkedStayLabel,
   type GroomingStayLinkInfo,
 } from "@/lib/groomingBookingLinkSearch";
-import { groomingPaymentMethodLabel } from "@/lib/groomingPaymentMethod";
 import { normalizeGroomingWorkflowStatus } from "@/lib/groomingWorkflow";
 
 export type GroomingLinkedBookingInfo = GroomingStayLinkInfo;
@@ -50,7 +49,7 @@ export function groomingStatusBadgeClass(status: string): string {
 export function formatMustFinishBy(iso: string | null | undefined): string | null {
   if (!iso) return null;
   try {
-    return format(parseISO(iso), "EEE d MMM, HH:mm");
+    return format(parseISO(iso), "EEE d MMM, h:mm a");
   } catch {
     return null;
   }
@@ -69,20 +68,73 @@ export function isGroomingDueSoon(mustFinishBy: string | null | undefined): bool
   }
 }
 
+export function clockMinutes(time: string | null | undefined): number | null {
+  if (!time) return null;
+  const match = time.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/** Display-only. Stored times stay 24-hour. */
+export function formatClock12(time: string | null | undefined): string {
+  const minutes = clockMinutes(time);
+  if (minutes == null) return "—";
+  return formatMinutes12(minutes);
+}
+
+export function formatMinutes12(totalMinutes: number): string {
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hours24 = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  const suffix = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 || 12;
+  return `${hours12}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+/** Hour labels on the day axis, e.g. "8 AM". */
+export function formatHourTick(totalMinutes: number): string {
+  const hours24 = Math.floor((((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60)) / 60);
+  const suffix = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 || 12;
+  return `${hours12} ${suffix}`;
+}
+
 export function formatTimeRange(
   startTime: string | null,
   durationMinutes: number | null | undefined,
 ): string {
-  if (!startTime) return "—";
-  const startSlice = startTime.slice(0, 5);
-  const startParts = startSlice.split(":").map(Number);
-  const startMin = (startParts[0] ?? 0) * 60 + (startParts[1] ?? 0);
+  const startMin = clockMinutes(startTime);
+  if (startMin == null) return "—";
   const dur = durationMinutes ?? 60;
-  const endMin = startMin + dur;
-  const endH = Math.floor(endMin / 60);
-  const endM = endMin % 60;
-  const end = `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
-  return `${startSlice} – ${end}`;
+  return `${formatMinutes12(startMin)} – ${formatMinutes12(startMin + dur)}`;
+}
+
+export function shortOwnerName(first: string | null | undefined, last: string | null | undefined): string {
+  const firstName = first?.trim() ?? "";
+  const lastName = last?.trim() ?? "";
+  if (firstName && lastName) return `${firstName.charAt(0).toUpperCase()}. ${lastName}`;
+  return firstName || lastName || "—";
+}
+
+export function nextFreeSlotMinutes(
+  blocks: { startMin: number; durationMin: number }[],
+  dayStartMin: number,
+  dayEndMin: number,
+  minGap = 15,
+): number | null {
+  const sorted = [...blocks]
+    .filter((block) => block.durationMin > 0)
+    .sort((a, b) => a.startMin - b.startMin);
+  let cursor = dayStartMin;
+  for (const block of sorted) {
+    if (block.startMin - cursor >= minGap) return cursor;
+    cursor = Math.max(cursor, block.startMin + block.durationMin);
+  }
+  if (dayEndMin - cursor >= minGap) return cursor;
+  return null;
 }
 
 export function petSizeLabel(size: string | null | undefined): string {
@@ -90,28 +142,30 @@ export function petSizeLabel(size: string | null | undefined): string {
   return size.charAt(0).toUpperCase() + size.slice(1);
 }
 
+export function invoiceCoveredByPackage(
+  lines: { description?: string | null }[] | null | undefined,
+): boolean {
+  return (lines ?? []).some((line) => /covered by/i.test(line.description ?? ""));
+}
+
 export function groomingBoardPaymentLabel(args: {
   status: string;
   payment_method: string | null | undefined;
   invoice_status?: string | null;
+  coveredByPackage?: boolean;
 }): string {
+  if (args.coveredByPackage) return "Package";
   const workflow = normalizeGroomingWorkflowStatus(args.status);
-  if (workflow === "paid") return "Paid";
-  if (args.invoice_status === "paid") return "Paid";
-  if (args.invoice_status === "partially_paid") return "Partially paid";
+  if (workflow === "paid" || args.invoice_status === "paid") return "Paid";
   if (args.payment_method === "complimentary") return "Complimentary";
-  if (args.payment_method) return groomingPaymentMethodLabel(args.payment_method);
-  if (args.invoice_status === "outstanding" || args.invoice_status === "overdue") {
-    return "Unpaid";
-  }
-  if (workflow === "completed") return "Unpaid";
-  return "—";
+  return "Unpaid";
 }
 
 export function groomingBoardPaymentBadgeClass(args: {
   status: string;
   payment_method: string | null | undefined;
   invoice_status?: string | null;
+  coveredByPackage?: boolean;
 }): string {
   const label = groomingBoardPaymentLabel(args);
   if (label === "Paid" || label === "Complimentary") {
@@ -119,6 +173,9 @@ export function groomingBoardPaymentBadgeClass(args: {
   }
   if (label === "Partially paid") {
     return "border-amber-300 bg-amber-50 text-amber-950";
+  }
+  if (label === "Package") {
+    return "border-violet-300 bg-violet-50 text-violet-950";
   }
   if (label === "Unpaid") {
     return "border-rose-300 bg-rose-50 text-rose-900";

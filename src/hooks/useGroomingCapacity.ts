@@ -75,11 +75,16 @@ export type GroomingPinnedAppt = Pick<
   | "must_finish_by"
   | "payment_method"
   | "invoice_id"
+  | "price"
 > & {
   pets: { name: string; size: string | null; breed: string | null } | null;
-  owners: { first_name: string; last_name: string } | null;
+  owners: { first_name: string; last_name: string; phone: string | null } | null;
   bookings: GroomingLinkedBooking | null;
-  invoices: { status: Database["public"]["Enums"]["invoice_status"] } | null;
+  invoices: {
+    status: Database["public"]["Enums"]["invoice_status"];
+    total: number | null;
+    invoice_line_items: { description: string | null }[] | null;
+  } | null;
 };
 
 export type GroomingApptValidation = {
@@ -94,7 +99,7 @@ export const groomingCapacityKeys = {
 };
 
 const PINNED_SELECT =
-  "id, pet_id, owner_id, station_id, groomer_id, service, appointment_date, appointment_time, duration_minutes, status, no_show, booking_id, notes, grooming_notes, must_finish_by, payment_method, invoice_id, pets(name, size, breed), owners(first_name, last_name), bookings(booking_type, status, booking_ref, check_in_date, check_out_date), invoices(status)";
+  "id, pet_id, owner_id, station_id, groomer_id, service, appointment_date, appointment_time, duration_minutes, status, no_show, booking_id, notes, grooming_notes, must_finish_by, payment_method, invoice_id, price, pets(name, size, breed), owners(first_name, last_name, phone), bookings(booking_type, status, booking_ref, check_in_date, check_out_date), invoices(status, total, invoice_line_items(description))";
 
 const FLOATING_SELECT =
   "id, pet_id, owner_id, service, duration_minutes, booking_id, must_finish_by, payment_method, status, groomer_id, grooming_notes, pets(name, size, breed), owners(first_name, last_name), bookings(booking_type, status, booking_ref, check_in_date, check_out_date)";

@@ -32,13 +32,14 @@ type GroomingInsert = Database["public"]["Tables"]["grooming_appointments"]["Ins
 type GroomingUpdate = Database["public"]["Tables"]["grooming_appointments"]["Update"];
 
 const GROOMING_JOIN_SELECT =
-  "*, owners(first_name, last_name, phone, other_notes), pets(name, breed, weight_kg, grooming_notes, colour, other_notes, special_alerts), bookings(booking_type, status, booking_ref, check_in_date, check_out_date)";
+  "*, owners(first_name, last_name, phone, other_notes), pets(name, breed, size, weight_kg, grooming_notes, colour, other_notes, special_alerts), grooming_stations(name), bookings(booking_type, status, booking_ref, check_in_date, check_out_date), invoices(status, total, invoice_line_items(description))";
 
 export type GroomingAppointmentWithJoins = GroomingRow & {
   owners: { first_name: string; last_name: string; phone: string; other_notes: string | null } | null;
   pets: {
     name: string;
     breed: string | null;
+    size: string | null;
     weight_kg: number | null;
     grooming_notes: string | null;
     colour: string | null;
@@ -46,6 +47,12 @@ export type GroomingAppointmentWithJoins = GroomingRow & {
     special_alerts: Database["public"]["Tables"]["pets"]["Row"]["special_alerts"];
   } | null;
   bookings: GroomingLinkedBookingInfo | null;
+  grooming_stations: { name: string } | null;
+  invoices: {
+    status: Database["public"]["Enums"]["invoice_status"];
+    total: number | null;
+    invoice_line_items: { description: string | null }[] | null;
+  } | null;
 };
 
 export const queryKeys = {

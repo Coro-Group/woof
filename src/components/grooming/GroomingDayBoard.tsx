@@ -23,16 +23,23 @@ import { GroomingConflictOverrideDialog } from "@/components/grooming/GroomingCo
 import { ownerDisplayName } from "@/lib/bookingUtils";
 import type { GroomingScheduleConflict } from "@/lib/groomingScheduleUtils";
 import { labelForGroomingService } from "@/lib/groomingCatalog";
+import { parseGroomingMeta } from "@/lib/groomingAppointmentMeta";
 import {
   activeLinkedStayLabel,
+  clockMinutes,
+  formatHourTick,
+  formatMinutes12,
   formatMustFinishBy,
   formatTimeRange,
   groomingBoardPaymentBadgeClass,
   groomingBoardPaymentLabel,
   groomingCardGroomerLabel,
   groomingStatusBadgeClass,
+  invoiceCoveredByPackage,
   isGroomingDueSoon,
+  nextFreeSlotMinutes,
   petSizeLabel,
+  shortOwnerName,
   stationAccentClass,
 } from "@/lib/groomingBoardUi";
 import { workflowStatusLabel } from "@/lib/groomingWorkflow";
@@ -55,7 +62,8 @@ import { toast } from "sonner";
 
 const DAY_START_MIN = 8 * 60;
 const DAY_END_MIN = 19 * 60;
-const TIMELINE_HEIGHT_PX = 600;
+const PX_PER_MINUTE = 4;
+const TIMELINE_HEIGHT_PX = (DAY_END_MIN - DAY_START_MIN) * PX_PER_MINUTE;
 const DRAG_MIME = "application/x-woof-grooming-appt";
 
 type Props = {
@@ -388,9 +396,19 @@ export function GroomingDayBoard({
                   >
                     {stationGroomer ?? "Unassigned"}
                   </div>
-                  <div className="text-[10px] font-normal text-muted-foreground tabular-nums">
-                    {st.used_minutes}/{st.window_minutes} min free
-                  </div>
+                  <StationHeaderSummary
+                    bookings={(pinnedByStation.get(st.station_id) ?? []).length}
+                    freeMinutes={st.free_minutes}
+                    nextFree={nextFreeSlotMinutes(
+                      (pinnedByStation.get(st.station_id) ?? []).flatMap((appt) => {
+                        const startMin = clockMinutes(appt.appointment_time);
+                        if (startMin == null) return [];
+                        return [{ startMin, durationMin: appt.duration_minutes ?? 45 }];
+                      }),
+                      DAY_START_MIN,
+                      DAY_END_MIN,
+                    )}
+                  />
                 </div>
                 );
               })}
@@ -412,7 +430,7 @@ export function GroomingDayBoard({
                         top: `${((min - DAY_START_MIN) / (DAY_END_MIN - DAY_START_MIN)) * 100}%`,
                       }}
                     >
-                      {isHour ? (min === DAY_END_MIN ? "19:00" : `${min / 60}:00`) : null}
+                      {isHour ? formatHourTick(min) : null}
                     </div>
                   );
                 })}
@@ -453,6 +471,7 @@ export function GroomingDayBoard({
                       <PinnedAppointmentCard
                         key={a.id}
                         appt={a}
+                        stationName={st.station_name}
                         stationIndex={stationIdx}
                         staffNameById={staffNameById}
                         onOpen={() => onAppointmentClick?.(a.id)}
@@ -520,13 +539,42 @@ export function GroomingDayBoard({
   );
 }
 
+function StationHeaderSummary({
+  bookings,
+  freeMinutes,
+  nextFree,
+}: {
+  bookings: number;
+  freeMinutes: number;
+  nextFree: number | null;
+}) {
+  return (
+    <div className="text-[10px] font-normal text-muted-foreground tabular-nums leading-tight">
+      <div>
+        {bookings} booking{bookings === 1 ? "" : "s"} · {freeMinutes} min free
+      </div>
+      <div>Next free {nextFree == null ? "—" : formatMinutes12(nextFree)}</div>
+    </div>
+  );
+}
+
+function appointmentServiceLine(appt: GroomingPinnedAppt): string {
+  const primary = labelForGroomingService(appt.service);
+  const extras = parseGroomingMeta(appt.notes).services.filter(
+    (label) => label.toLowerCase() !== primary.toLowerCase(),
+  );
+  return [primary, ...extras].join(" + ");
+}
+
 function PinnedAppointmentCard({
   appt,
+  stationName,
   stationIndex,
   staffNameById,
   onOpen,
 }: {
   appt: GroomingPinnedAppt;
+  stationName: string;
   stationIndex: number;
   staffNameById: Map<string, string>;
   onOpen: () => void;
@@ -536,27 +584,33 @@ function PinnedAppointmentCard({
 
   const duration = appt.duration_minutes ?? 45;
   const style = blockStyle(start, duration);
+  const compact = duration < 25;
   const ownerName = appt.owners
     ? ownerDisplayName(appt.owners.first_name, appt.owners.last_name)
     : "—";
-  const serviceLine = [
-    labelForGroomingService(appt.service),
-    petSizeLabel(appt.pets?.size),
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const ownerShort = shortOwnerName(appt.owners?.first_name, appt.owners?.last_name);
+  const breedSize = [appt.pets?.breed, petSizeLabel(appt.pets?.size)].filter(Boolean).join(" · ");
+  const serviceLine = appointmentServiceLine(appt);
   const visitNotes = userVisitNotesFromStored(appt.notes);
+  const meta = parseGroomingMeta(appt.notes);
+  const pickupLabel = meta.estimatedPickup?.trim() || formatMinutes12(start + duration);
+  const transportLines = (appt.invoices?.invoice_line_items ?? [])
+    .map((line) => line.description ?? "")
+    .filter((description) => /transport|pick-?up|drop-?off/i.test(description));
   const dueSoon = isGroomingDueSoon(appt.must_finish_by);
   const accent = stationAccentClass(stationIndex);
+  const coveredByPackage = invoiceCoveredByPackage(appt.invoices?.invoice_line_items);
   const paymentLabel = groomingBoardPaymentLabel({
     status: appt.status,
     payment_method: appt.payment_method,
     invoice_status: appt.invoices?.status,
+    coveredByPackage,
   });
   const paymentBadgeClass = groomingBoardPaymentBadgeClass({
     status: appt.status,
     payment_method: appt.payment_method,
     invoice_status: appt.invoices?.status,
+    coveredByPackage,
   });
   const linkedStay = activeLinkedStayLabel(appt.bookings, appt.appointment_date);
   const groomerLabel = groomingCardGroomerLabel({
@@ -564,6 +618,9 @@ function PinnedAppointmentCard({
     groomingNotes: appt.grooming_notes,
     staffNameById,
   });
+  const placeLabel = [groomerLabel !== "—" ? groomerLabel : null, stationName].filter(Boolean).join(" · ");
+  const invoiceTotal = appt.invoices?.total ?? appt.price;
+  const timeLabel = formatTimeRange(appt.appointment_time, duration);
 
   return (
     <HoverCard openDelay={200} closeDelay={100}>
@@ -571,8 +628,9 @@ function PinnedAppointmentCard({
         <button
           type="button"
           data-pinned-block
+          data-testid={`grooming-day-card-${appt.id}`}
           className={cn(
-            "absolute left-0.5 right-0.5 z-10 overflow-hidden rounded border border-border/60 bg-card px-1.5 py-1 text-left text-[10px] shadow-sm hover:shadow-md border-l-4",
+            "absolute left-0.5 right-0.5 z-10 overflow-hidden rounded border border-border/60 bg-card px-1.5 py-0.5 text-left text-[10px] leading-tight shadow-sm hover:z-30 hover:shadow-md border-l-4",
             accent,
           )}
           style={style}
@@ -581,80 +639,81 @@ function PinnedAppointmentCard({
             onOpen();
           }}
         >
-          <div className="flex items-start justify-between gap-1">
-            <span className="font-semibold tabular-nums truncate">
-              {formatTimeRange(appt.appointment_time, duration)}
-            </span>
-            <Badge
-              variant="outline"
-              className={cn(
-                "shrink-0 px-1 py-0 text-[8px] leading-tight",
-                groomingStatusBadgeClass(appt.status),
-              )}
-            >
-              {workflowStatusLabel(appt.status)}
-            </Badge>
-          </div>
-          <Link
-            to={`/customers/${appt.owner_id}`}
-            className="block truncate text-[10px] font-medium text-primary hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {ownerName}
-          </Link>
-          <div className="truncate font-medium">{appt.pets?.name ?? "Pet"}</div>
-          <div className="truncate text-muted-foreground">Groomer: {groomerLabel}</div>
-          <div className="truncate text-muted-foreground">
-            {[appt.pets?.breed, serviceLine].filter(Boolean).join(" · ")}
-          </div>
-          <div className="flex flex-wrap items-center gap-1 pt-0.5">
-            <Badge
-              variant="outline"
-              className={cn("px-1 py-0 text-[8px] leading-tight", paymentBadgeClass)}
-            >
-              {paymentLabel}
-            </Badge>
-            {linkedStay ? (
-              <Badge
-                variant="outline"
-                className="px-1 py-0 text-[8px] leading-tight border-slate-300 bg-slate-50 text-slate-800"
-              >
-                {linkedStay}
-              </Badge>
-            ) : null}
-          </div>
-          <div className="tabular-nums text-muted-foreground">{duration} min</div>
+          {compact ? (
+            <>
+              <div className="truncate font-medium">
+                {formatMinutes12(start)} · {appt.pets?.name ?? "Pet"}
+                {breedSize ? ` (${breedSize})` : ""} · {ownerShort} · {serviceLine}
+              </div>
+              <div className="flex items-center gap-1 truncate">
+                <span className="truncate text-muted-foreground">{placeLabel}</span>
+                <Badge variant="outline" className={cn("shrink-0 px-1 py-0 text-[8px]", groomingStatusBadgeClass(appt.status))}>
+                  {workflowStatusLabel(appt.status)}
+                </Badge>
+                <Badge variant="outline" className={cn("shrink-0 px-1 py-0 text-[8px]", paymentBadgeClass)}>
+                  {paymentLabel}
+                </Badge>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="truncate font-semibold tabular-nums">{timeLabel}</div>
+              <div className="truncate font-medium">
+                {appt.pets?.name ?? "Pet"}
+                {breedSize ? <span className="font-normal text-muted-foreground"> · {breedSize}</span> : null}
+              </div>
+              <div className="truncate">{ownerName}</div>
+              <div className="truncate">{serviceLine}</div>
+              <div className="truncate text-muted-foreground">{placeLabel}</div>
+              <div className="flex flex-wrap items-center gap-1">
+                <Badge variant="outline" className={cn("px-1 py-0 text-[8px]", groomingStatusBadgeClass(appt.status))}>
+                  {workflowStatusLabel(appt.status)}
+                </Badge>
+                <Badge variant="outline" className={cn("px-1 py-0 text-[8px]", paymentBadgeClass)}>
+                  {paymentLabel}
+                </Badge>
+              </div>
+            </>
+          )}
         </button>
       </HoverCardTrigger>
       <HoverCardContent side="right" className="w-72 space-y-2 text-sm">
-        <p className="font-semibold tabular-nums">
-          {formatTimeRange(appt.appointment_time, duration)}
+        <p className="font-semibold tabular-nums">{timeLabel}</p>
+        <p>
+          <span className="text-muted-foreground">Pet:</span> {appt.pets?.name ?? "Pet"}
+          {breedSize ? ` · ${breedSize}` : ""}
         </p>
         <p>
           <span className="text-muted-foreground">Owner:</span>{" "}
           <Link to={`/customers/${appt.owner_id}`} className="text-primary hover:underline">
             {ownerName}
           </Link>
-        </p>
-        <p>
-          <span className="text-muted-foreground">Dog:</span> {appt.pets?.name ?? "Pet"}
-          {appt.pets?.breed ? ` · ${appt.pets.breed}` : ""}
+          {appt.owners?.phone ? ` · ${appt.owners.phone}` : ""}
         </p>
         <p>
           <span className="text-muted-foreground">Service:</span> {serviceLine}
         </p>
-        {groomerLabel !== "—" ? (
-          <p>
-            <span className="text-muted-foreground">Groomer:</span> {groomerLabel}
-          </p>
-        ) : (
-          <p className="text-muted-foreground">Groomer: —</p>
-        )}
+        <p>
+          <span className="text-muted-foreground">Groomer / station:</span> {placeLabel || "—"}
+        </p>
+        <p>
+          <span className="text-muted-foreground">Pickup:</span> {pickupLabel}
+        </p>
+        <p>
+          <span className="text-muted-foreground">Transport:</span>{" "}
+          {transportLines.length > 0 ? transportLines.join("; ") : "—"}
+        </p>
+        <p>
+          <span className="text-muted-foreground">Invoice:</span>{" "}
+          {invoiceTotal != null ? `AED ${Number(invoiceTotal).toFixed(2)}` : "—"}
+        </p>
         {visitNotes ? (
           <p className="whitespace-pre-wrap text-xs">
             <span className="text-muted-foreground">Notes:</span> {visitNotes}
           </p>
-        ) : null}
+        ) : (
+          <p className="text-xs text-muted-foreground">Notes: —</p>
+        )}
         <p>
           <span className="text-muted-foreground">Payment:</span> {paymentLabel}
         </p>
@@ -909,6 +968,7 @@ function FloatingBacklogCard({
             value={time}
             onChange={(e) => setTime(e.target.value)}
           />
+          <p className="text-[10px] text-muted-foreground tabular-nums">{formatMinutes12(clockMinutes(time) ?? 0)}</p>
         </div>
         <Button
           type="button"

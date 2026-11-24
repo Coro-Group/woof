@@ -4,6 +4,7 @@ import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
 import type { Database, Json } from "@/integrations/supabase/types";
 import { groomingServiceToPricingKey } from "@/lib/addonPricing";
+import { formatTimeRange } from "@/lib/groomingBoardUi";
 import { DogSizeField } from "@/components/DogSizeField";
 import { PetSpecialAlertsBanner } from "@/components/PetSpecialAlertsBanner";
 import { Button } from "@/components/ui/button";
@@ -429,6 +430,11 @@ export function GroomingPetDraftCard({
             value={draft.apptTime}
             onChange={(e) => onChange({ apptTime: e.target.value })}
           />
+          {draft.apptTime ? (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {formatTimeRange(draft.apptTime, draft.durationMin)}
+            </p>
+          ) : null}
         </div>
         <div className="space-y-2">
           <Label>Station (optional)</Label>

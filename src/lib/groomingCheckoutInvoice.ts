@@ -4,6 +4,7 @@ import { format, parseISO } from "date-fns";
 import type { Database } from "@/integrations/supabase/types";
 import { createServiceInvoice } from "@/lib/bookingUtils";
 import { parseGroomingMeta } from "@/lib/groomingAppointmentMeta";
+import { pickInvoiceLineForService } from "@/lib/sameDayServiceInvoice";
 import { labelForGroomingService } from "@/lib/groomingCatalog";
 import { groomingPaymentMethodLabel } from "@/lib/groomingPaymentMethod";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
@@ -184,7 +185,10 @@ async function createInvoiceForAppointment(
 async function syncAppointmentPriceToInvoiceLine(
   supabase: Client,
   invoiceId: string,
-  appt: Pick<GroomingApptForCheckout, "price">,
+  appt: Pick<
+    GroomingApptForCheckout,
+    "price" | "service" | "notes" | "appointment_date" | "pets"
+  >,
 ): Promise<GroomingInvoicePriceSyncResult> {
   const { data: invoice, error: invErr } = await supabase
     .from("invoices")
@@ -205,13 +209,19 @@ async function syncAppointmentPriceToInvoiceLine(
   const targetPrice = groomingPriceAed(appt.price);
   const { data: lines, error: linesErr } = await supabase
     .from("invoice_line_items")
-    .select("id, unit_price, quantity, sort_order")
+    .select("id, unit_price, quantity, sort_order, service_type, description")
     .eq("invoice_id", invoiceId)
     .order("sort_order", { ascending: true });
   if (linesErr) throw linesErr;
 
-  const primary = lines?.[0];
-  if (!primary) return { kind: "no_invoice" };
+  const expectedDescription = groomingInvoiceLineDescription({
+    service: appt.service,
+    notes: appt.notes,
+    petName: appt.pets?.name ?? "Pet",
+    appointmentDate: appt.appointment_date,
+  });
+  const primary = pickInvoiceLineForService(lines ?? [], "grooming", expectedDescription);
+  if (!primary) return { kind: "skipped", reason: "No grooming line on this invoice to update." };
 
   const currentTotal = groomingPriceAed(primary.unit_price * Math.max(1, primary.quantity));
   if (currentTotal === targetPrice) return { kind: "unchanged" };

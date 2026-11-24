@@ -16,6 +16,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { recalculateInvoiceTotals } from "@/lib/invoiceRecalc";
+import { findOpenSameDayServiceInvoice, syncMergedInvoiceServiceType } from "@/lib/sameDayServiceInvoiceLookup";
 import { composeNotesWithHourlyDraft } from "@/lib/daycareSessionMeta";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
@@ -150,6 +151,15 @@ export async function findOrCreateHourlyDraft(
   if (sessions.length === 0) throw new Error("No sessions provided");
 
   let invoiceId = await findExistingHourlyDraft(ownerId, sessionDate);
+  let mergedServiceType: string | null = null;
+
+  if (!invoiceId) {
+    const open = await findOpenSameDayServiceInvoice(supabase, ownerId, sessionDate);
+    if (open) {
+      invoiceId = open.id;
+      mergedServiceType = open.service_type;
+    }
+  }
 
   if (!invoiceId) {
     // ── Create a new draft invoice ─────────────────────────────────────────
@@ -221,6 +231,10 @@ export async function findOrCreateHourlyDraft(
     if (placeholderLines.length > 0) {
       const { error: lineErr } = await supabase.from("invoice_line_items").insert(placeholderLines);
       if (lineErr) throw lineErr;
+    }
+
+    if (mergedServiceType !== null) {
+      await syncMergedInvoiceServiceType(supabase, invoiceId, mergedServiceType, "daycare");
     }
   }
 

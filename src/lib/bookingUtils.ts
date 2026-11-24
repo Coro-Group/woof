@@ -9,6 +9,12 @@ import { MAX_BOARDING_STAY_NIGHTS } from "@/lib/boardingLimits";
 import { resolveAddonPricesForKeys } from "@/lib/addonPricing";
 import { serviceTypeForBoardingAddonKey } from "@/lib/groomingCatalog";
 import { invoiceDueDateAtCheckIn, invoiceDueDateToday } from "@/lib/invoiceDueDate";
+import { recalculateInvoiceTotals } from "@/lib/invoiceRecalc";
+import {
+  findOpenSameDayServiceInvoice,
+  syncMergedInvoiceServiceType,
+} from "@/lib/sameDayServiceInvoiceLookup";
+import { isSameDayMergeableService } from "@/lib/sameDayServiceInvoice";
 import { netFromGrossInclusive, vatAmountFromGrossInclusive } from "@/lib/vatConfig";
 import { roundAed } from "@/lib/money";
 
@@ -142,6 +148,47 @@ export interface CreateServiceInvoiceParams {
   dueDate?: string;
 }
 
+async function appendLinesToOpenInvoice(
+  db: SupabaseClient<Database>,
+  invoice: { id: string; service_type: string | null },
+  serviceType: string,
+  lines: ServiceInvoiceLineItem[],
+): Promise<string> {
+  const { data: existingLines, error: sortErr } = await db
+    .from("invoice_line_items")
+    .select("sort_order")
+    .eq("invoice_id", invoice.id)
+    .order("sort_order", { ascending: false })
+    .limit(1);
+  if (sortErr) throw sortErr;
+
+  const maxSort = existingLines?.[0]?.sort_order ?? -1;
+  const lineRows = lines.map((li, i) => {
+    const quantity = li.quantity;
+    const lineTotal = li.unitPrice * quantity;
+    return {
+      invoice_id: invoice.id,
+      description: li.description,
+      quantity,
+      unit_price: li.unitPrice,
+      total_price: lineTotal,
+      line_total: lineTotal,
+      pricing_key: li.pricingKey ?? null,
+      service_type: li.serviceType ?? serviceType,
+      sort_order: (maxSort ?? -1) + 1 + i,
+    };
+  });
+
+  if (lineRows.length > 0) {
+    const { error: liErr } = await db.from("invoice_line_items").insert(lineRows);
+    if (liErr) throw liErr;
+  }
+
+  await syncMergedInvoiceServiceType(db, invoice.id, invoice.service_type, serviceType);
+  await recalculateInvoiceTotals(invoice.id, db);
+  return invoice.id;
+}
+
 /**
  * Shared invoice creator used by all service flows (boarding, grooming, park,
  * daycare). Writes both `_aed` and non-suffixed columns for backwards
@@ -179,6 +226,17 @@ export async function createServiceInvoice(
 
   const subtotal = normalizedLines.reduce((s, li) => s + li.unitPrice * li.quantity, 0);
 
+  const dueDate =
+    dueDateOverride ??
+    (checkInDate ? invoiceDueDateAtCheckIn(checkInDate) : invoiceDueDateToday());
+
+  if (isSameDayMergeableService(serviceType)) {
+    const existing = await findOpenSameDayServiceInvoice(db, ownerId, dueDate);
+    if (existing) {
+      return appendLinesToOpenInvoice(db, existing, serviceType, normalizedLines);
+    }
+  }
+
   let discountPct = 0;
   let discountAed = 0;
   if (!skipMemberDiscount && subtotal > 0) {
@@ -196,9 +254,6 @@ export async function createServiceInvoice(
 
   const total = subtotal - discountAed;
 
-  const dueDate =
-    dueDateOverride ??
-    (checkInDate ? invoiceDueDateAtCheckIn(checkInDate) : invoiceDueDateToday());
   const isBoardingReference = serviceType === "boarding";
 
   const grossTotal = Math.max(0, total);

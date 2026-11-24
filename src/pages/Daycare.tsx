@@ -1082,6 +1082,21 @@ function PlannerTab() {
             checkInDate: checkInDraft.session_date,
           });
 
+          const { data: linkedInvoice } = await supabase
+            .from("invoices")
+            .select("service_id")
+            .eq("id", invoiceId)
+            .maybeSingle();
+          if (linkedInvoice?.service_id && linkedInvoice.service_id !== referenceSessionId && referencePetId) {
+            const { error: primaryLinkErr } = await supabase
+              .from("daycare_sessions")
+              .update({
+                notes: composeNotesWithHourlyInvoiced(sessionNotes[referencePetId] ?? null, invoiceId),
+              })
+              .eq("id", referenceSessionId);
+            if (primaryLinkErr) throw primaryLinkErr;
+          }
+
           // Link sibling single-day sessions to the same invoice (primary uses service_id).
           const siblingPetIds = okSingleIds.filter(
             (petId) => sessionsCreated[petId] && sessionsCreated[petId] !== referenceSessionId,

@@ -16,6 +16,7 @@ import {
   type GroomingInvoicePriceSyncResult,
 } from "@/lib/groomingCheckoutInvoice";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
+import { MULTIPLE_SERVICES_LABEL, serviceRevenueShare } from "@/lib/sameDayServiceInvoice";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { withoutDogSizeColumn } from "@/lib/dogSizeNotes";
@@ -473,7 +474,7 @@ export function useInvoiceForGroomingAppointment(appointmentId: string | null) {
             .from("invoices")
             .select(invoiceSelect)
             .eq("service_id", appointmentId!)
-            .eq("service_type", "grooming")
+            .in("service_type", ["grooming", "Multiple services"])
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle(),
@@ -683,7 +684,7 @@ export type GroomingDayInvoiceRow = {
   total: number | null;
 };
 
-/** Invoices linked to grooming appointments (`service_id` = appointment id). */
+/** Grooming revenue for the day. Combined invoices contribute their grooming share only. */
 export function useGroomingDayInvoices(
   appointmentIds: readonly string[],
   options?: { enabled?: boolean },
@@ -694,13 +695,72 @@ export function useGroomingDayInvoices(
     queryKey: ["grooming", "dayInvoices", sortedKey] as const,
     enabled: extraEnabled && appointmentIds.length > 0,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select("id, service_id, status, total")
-        .eq("service_type", "grooming")
-        .in("service_id", [...appointmentIds]);
-      if (error) throw error;
-      return (data ?? []) as GroomingDayInvoiceRow[];
+      const ids = [...appointmentIds];
+      const [{ data: linkedAppointments, error: linkErr }, { data: byService, error: serviceErr }] =
+        await Promise.all([
+          supabase.from("grooming_appointments").select("invoice_id").in("id", ids),
+          supabase
+            .from("invoices")
+            .select("id, service_id, service_type, status, total")
+            .in("service_type", ["grooming", MULTIPLE_SERVICES_LABEL])
+            .in("service_id", ids),
+        ]);
+      if (linkErr) throw linkErr;
+      if (serviceErr) throw serviceErr;
+
+      const linkedIds = Array.from(
+        new Set(
+          (linkedAppointments ?? [])
+            .map((row) => row.invoice_id)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+      let linkedInvoices: typeof byService = [];
+      if (linkedIds.length > 0) {
+        const { data, error } = await supabase
+          .from("invoices")
+          .select("id, service_id, service_type, status, total")
+          .in("id", linkedIds);
+        if (error) throw error;
+        linkedInvoices = (data ?? []).filter(
+          (row) => row.service_type === "grooming" || row.service_type === MULTIPLE_SERVICES_LABEL,
+        );
+      }
+
+      const invoices = new Map<string, NonNullable<typeof byService>[number]>();
+      for (const row of [...(byService ?? []), ...(linkedInvoices ?? [])]) {
+        invoices.set(row.id, row);
+      }
+
+      const mixedIds = [...invoices.values()]
+        .filter((row) => row.service_type === MULTIPLE_SERVICES_LABEL)
+        .map((row) => row.id);
+      const linesByInvoice = new Map<
+        string,
+        { service_type: string | null; quantity: number; unit_price: number }[]
+      >();
+      if (mixedIds.length > 0) {
+        const { data: lines, error: lineErr } = await supabase
+          .from("invoice_line_items")
+          .select("invoice_id, service_type, quantity, unit_price")
+          .in("invoice_id", mixedIds);
+        if (lineErr) throw lineErr;
+        for (const line of lines ?? []) {
+          const bucket = linesByInvoice.get(line.invoice_id) ?? [];
+          bucket.push(line);
+          linesByInvoice.set(line.invoice_id, bucket);
+        }
+      }
+
+      return [...invoices.values()].map((row) => ({
+        id: row.id,
+        service_id: row.service_id ?? "",
+        status: row.status,
+        total:
+          row.service_type === MULTIPLE_SERVICES_LABEL
+            ? serviceRevenueShare(row.total, linesByInvoice.get(row.id) ?? [], "grooming")
+            : row.total,
+      })) satisfies GroomingDayInvoiceRow[];
     },
   });
 }

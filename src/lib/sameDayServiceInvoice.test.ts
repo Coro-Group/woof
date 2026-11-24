@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   headerServiceTypeForMerge,
+  invoiceMatchesServiceFilter,
   isOpenSameDayMergeTarget,
   isSameDayMergeableService,
   MULTIPLE_SERVICES_LABEL,
   pickInvoiceLineForService,
   pickOpenSameDayInvoice,
+  serviceRevenueShare,
 } from "@/lib/sameDayServiceInvoice";
 
 const serviceDate = "2026-11-24";
@@ -63,6 +65,27 @@ describe("same-day service invoice merge", () => {
     expect(headerServiceTypeForMerge("daycare", "daycare_hourly_placeholder")).toBe("daycare");
     expect(headerServiceTypeForMerge(MULTIPLE_SERVICES_LABEL, "retail")).toBe(MULTIPLE_SERVICES_LABEL);
     expect(headerServiceTypeForMerge("grooming", "transport")).toBe(MULTIPLE_SERVICES_LABEL);
+  });
+
+  it("splits a combined invoice by line value and keeps a single-service total whole", () => {
+    const lines = [
+      { service_type: "daycare", quantity: 1, unit_price: 80 },
+      { service_type: "grooming", quantity: 1, unit_price: 120 },
+    ];
+    expect(serviceRevenueShare(200, lines, "grooming")).toBe(120);
+    expect(serviceRevenueShare(200, lines, "daycare")).toBe(80);
+    expect(serviceRevenueShare(200, [{ service_type: "grooming", quantity: 1, unit_price: 200 }], "grooming")).toBe(
+      200,
+    );
+  });
+
+  it("matches a combined invoice in a daycare or grooming filter", () => {
+    const lines = ["daycare", "grooming"];
+    expect(invoiceMatchesServiceFilter(MULTIPLE_SERVICES_LABEL, lines, "daycare")).toBe(true);
+    expect(invoiceMatchesServiceFilter(MULTIPLE_SERVICES_LABEL, lines, "grooming")).toBe(true);
+    expect(invoiceMatchesServiceFilter(MULTIPLE_SERVICES_LABEL, lines, "retail")).toBe(false);
+    expect(invoiceMatchesServiceFilter("daycare", ["daycare"], "daycare")).toBe(true);
+    expect(invoiceMatchesServiceFilter("boarding", ["boarding"], "grooming")).toBe(false);
   });
 
   it("updates the grooming line on a combined invoice", () => {

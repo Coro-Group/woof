@@ -64,6 +64,7 @@ import {
 } from "@/lib/invoiceRecalc";
 import { ownerHasWalletCredit, ownerWalletCredit } from "@/lib/walletCredit";
 import { HOURLY_PLACEHOLDER_SERVICE_TYPE } from "@/lib/daycareHourlyDraftInvoice";
+import { MULTIPLE_SERVICES_LABEL } from "@/lib/sameDayServiceInvoice";
 import { canRevertInvoicePayment, walletRefundFromPayments } from "@/lib/revertInvoicePayment";
 import { markInvoiceOutstanding } from "@/lib/markInvoiceOutstanding";
 
@@ -132,7 +133,12 @@ export default function InvoiceDetailPage() {
     window.open(`/print/invoice/${id}`, "_blank", "noopener,noreferrer");
   }, [id]);
 
-  const isDaycareInvoice = data?.invoice?.service_type === "daycare";
+  const hasDaycareService = data?.lines.some(
+    (line) => line.service_type === "daycare" || line.service_type === HOURLY_PLACEHOLDER_SERVICE_TYPE,
+  );
+  const isDaycareInvoice =
+    data?.invoice?.service_type === "daycare" ||
+    (data?.invoice?.service_type === MULTIPLE_SERVICES_LABEL && Boolean(hasDaycareService));
   const { data: linkedDaycareSessions = [] } = useLinkedDaycareSessionsForInvoice(
     isDaycareInvoice ? data?.invoice?.id : undefined,
     isDaycareInvoice ? data?.invoice?.service_id ?? undefined : undefined,
@@ -474,7 +480,7 @@ export default function InvoiceDetailPage() {
           </Card>
         )}
 
-        {status === "draft" && inv.service_type === "daycare" &&
+        {status === "draft" && isDaycareInvoice &&
           data.lines.some((l) => l.service_type === HOURLY_PLACEHOLDER_SERVICE_TYPE) && (
           <Card className="border-amber-200 bg-amber-50/40">
             <CardContent className="p-4 text-sm text-amber-900">

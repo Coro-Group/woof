@@ -87,6 +87,51 @@ export type ServiceLineMatch = {
  * Price sync must update the grooming line. On a combined invoice the first
  * line is often daycare, and that line must stay untouched.
  */
+function lineAmount(line: { quantity: number; unit_price: number }): number {
+  const quantity = Number(line.quantity);
+  const unitPrice = Number(line.unit_price);
+  if (!Number.isFinite(quantity) || !Number.isFinite(unitPrice)) return 0;
+  return unitPrice * quantity;
+}
+
+function lineMatchesService(lineServiceType: string | null | undefined, serviceType: string): boolean {
+  if (!lineServiceType) return false;
+  if (lineServiceType === serviceType) return true;
+  if (serviceType === "daycare" && lineServiceType === "daycare_hourly_placeholder") return true;
+  return false;
+}
+
+/**
+ * Share of an invoice total that belongs to one service. A single-service
+ * invoice keeps its full total. A combined invoice is split by line value.
+ */
+export function serviceRevenueShare(
+  invoiceTotal: number | null | undefined,
+  lines: Array<{ service_type: string | null; quantity: number; unit_price: number }>,
+  serviceType: string,
+): number {
+  const total = Number(invoiceTotal ?? 0);
+  if (!Number.isFinite(total) || total === 0) return 0;
+  const all = lines.reduce((sum, line) => sum + lineAmount(line), 0);
+  if (all <= 0) return 0;
+  const matched = lines
+    .filter((line) => lineMatchesService(line.service_type, serviceType))
+    .reduce((sum, line) => sum + lineAmount(line), 0);
+  return Math.round(total * (matched / all) * 100) / 100;
+}
+
+/** Invoice list filter: a combined invoice matches when one of its lines does. */
+export function invoiceMatchesServiceFilter(
+  headerServiceType: string | null | undefined,
+  lineServiceTypes: Array<string | null | undefined>,
+  filter: string,
+): boolean {
+  if (!filter || filter === "all") return true;
+  if (headerServiceType === filter) return true;
+  if (headerServiceType !== MULTIPLE_SERVICES_LABEL) return false;
+  return lineServiceTypes.some((line) => lineMatchesService(line, filter));
+}
+
 export function pickInvoiceLineForService<T extends ServiceLineMatch>(
   lines: T[],
   serviceType: string,

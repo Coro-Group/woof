@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { ownerDisplayName } from "@/lib/bookingUtils";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
+import { invoiceMatchesServiceFilter, MULTIPLE_SERVICES_LABEL } from "@/lib/sameDayServiceInvoice";
 
 type InvoiceStatus = Database["public"]["Enums"]["invoice_status"];
 
@@ -48,10 +49,15 @@ export function useInvoices(filters: UseInvoicesFilters = {}) {
     queryFn: async () => {
       const invoiceSelect =
         "id, invoice_number, owner_id, service_type, status, total, vat_aed, amount_paid, due_date, created_at, owners(first_name, last_name, phone)";
+      const serviceFilter = filters.serviceType && filters.serviceType !== "all" ? filters.serviceType : null;
 
       let q = supabase
         .from("invoices")
-        .select(invoiceSelect)
+        .select(
+          serviceFilter && serviceFilter !== MULTIPLE_SERVICES_LABEL
+            ? `${invoiceSelect}, invoice_line_items(service_type)`
+            : invoiceSelect,
+        )
         // Wallet top-up receipts are receipt-only and never appear in invoice lists.
         .or("receipt_only.is.null,receipt_only.eq.false")
         .order("created_at", { ascending: false });
@@ -65,8 +71,10 @@ export function useInvoices(filters: UseInvoicesFilters = {}) {
       if (filters.status?.length) q = q.in("status", filters.status);
       if (filters.from) q = q.gte("created_at", `${filters.from}T00:00:00`);
       if (filters.to) q = q.lte("created_at", `${filters.to}T23:59:59`);
-      if (filters.serviceType && filters.serviceType !== "all") {
-        q = q.eq("service_type", filters.serviceType);
+      if (serviceFilter === MULTIPLE_SERVICES_LABEL) {
+        q = q.eq("service_type", serviceFilter);
+      } else if (serviceFilter) {
+        q = q.or(`service_type.eq.${serviceFilter},service_type.eq."${MULTIPLE_SERVICES_LABEL}"`);
       }
 
       const { data, error } = await q;
@@ -88,9 +96,20 @@ export function useInvoices(filters: UseInvoicesFilters = {}) {
         due_date: string | null;
         created_at: string;
         owners: { first_name: string | null; last_name: string | null; phone: string | null } | null;
+        invoice_line_items?: { service_type: string | null }[] | null;
       };
 
-      return ((data ?? []) as InvoiceListRow[]).map((row) => {
+      return ((data ?? []) as InvoiceListRow[])
+        .filter((row) =>
+          serviceFilter
+            ? invoiceMatchesServiceFilter(
+                row.service_type,
+                (row.invoice_line_items ?? []).map((line) => line.service_type),
+                serviceFilter,
+              )
+            : true,
+        )
+        .map((row) => {
         const owner = row.owners;
         const dueDate = row.due_date ? new Date(`${row.due_date}T00:00:00`) : null;
         let daysOverdue = 0;

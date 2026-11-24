@@ -135,8 +135,8 @@ async function resolveInvoice(
     supabase
       .from("invoices")
       .select("id, status, total, amount_paid, due_date")
-      .eq("service_type", "grooming")
       .eq("service_id", appt.id)
+      .in("service_type", ["grooming", "Multiple services"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),

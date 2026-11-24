@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { AlertTriangle, Download, Package, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { useAllGroomingPackages } from "@/hooks/useGroomingPackages";
-import { type PackageWithDetails } from "@/hooks/useDaycare";
+import { useAllGroomingPackages, type SoldGroomingPackage } from "@/hooks/useGroomingPackages";
+import { complimentaryDaycareSummary } from "@/lib/complimentaryDaycare";
 import { serviceGrantLabel } from "@/lib/packageCatalog";
 import { exportDaycarePackagesToExcel } from "@/lib/daycarePackagesExport";
 import { PurchasePackageDialog } from "@/components/packages/PurchasePackageDialog";
@@ -44,11 +44,11 @@ function soldCreditBarColour(remaining: number) {
   return "bg-emerald-500";
 }
 
-function soldPackageLabel(pkg: PackageWithDetails): string {
+function soldPackageLabel(pkg: SoldGroomingPackage): string {
   return pkg.package_name ?? serviceGrantLabel(pkg.service_code);
 }
 
-function soldPackageMatchesSearch(pkg: PackageWithDetails, query: string): boolean {
+function soldPackageMatchesSearch(pkg: SoldGroomingPackage, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const ownerName = pkg.owners
@@ -59,7 +59,7 @@ function soldPackageMatchesSearch(pkg: PackageWithDetails, query: string): boole
   return ownerName.includes(q) || petName.includes(q) || pkgName.includes(q);
 }
 
-function GroomingPackageCard({ pkg }: { pkg: PackageWithDetails }) {
+function GroomingPackageCard({ pkg }: { pkg: SoldGroomingPackage }) {
   const remaining = pkg.total_days - pkg.days_used;
   const pct = Math.min(100, (pkg.days_used / Math.max(1, pkg.total_days)) * 100);
   const isExhausted = remaining <= 0;
@@ -118,6 +118,11 @@ function GroomingPackageCard({ pkg }: { pkg: PackageWithDetails }) {
         {pkg.expiry_date && (
           <p className="text-[10px] text-muted-foreground">
             Expires {format(parseISO(pkg.expiry_date), "d MMM yyyy")}
+          </p>
+        )}
+        {pkg.complimentaryDaycare && (
+          <p className="text-xs" data-testid={`grooming-complimentary-daycare-${pkg.id}`}>
+            {complimentaryDaycareSummary(pkg.complimentaryDaycare.total, pkg.complimentaryDaycare.used)}
           </p>
         )}
       </CardContent>

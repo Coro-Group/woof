@@ -8,6 +8,7 @@ import {
   type PackagePricing,
   pricingForPackageSize,
 } from "@/lib/packageCatalog";
+import { COMPLIMENTARY_DAYCARE_SOURCE } from "@/lib/complimentaryDaycare";
 import { ownerMemberTierFromFlags } from "@/lib/memberTier";
 import type { PackageWithDetails } from "@/hooks/useDaycare";
 
@@ -125,6 +126,10 @@ type SoldCreditPurchaseGroupJoin = {
   package_definitions?: { display_name?: string | null } | null;
 } | null;
 
+export type SoldGroomingPackage = PackageWithDetails & {
+  complimentaryDaycare: { total: number; used: number } | null;
+};
+
 /**
  * Cross-owner list of sold grooming credits (mirror of useAllDaycarePackages).
  * Returns the shared PackageWithDetails shape so the daycare Excel export and
@@ -134,7 +139,7 @@ type SoldCreditPurchaseGroupJoin = {
 export function useAllGroomingPackages() {
   return useQuery({
     queryKey: ["service_credits", "grooming", "all_with_details"] as const,
-    queryFn: async (): Promise<PackageWithDetails[]> => {
+    queryFn: async (): Promise<SoldGroomingPackage[]> => {
       const groomingCodes = await fetchGroomingCreditCodes();
       if (groomingCodes.length === 0) return [];
 
@@ -150,12 +155,34 @@ export function useAllGroomingPackages() {
       if (error) throw error;
 
       const today = new Date().toISOString().slice(0, 10);
-
-      return (data ?? []).map((row) => {
-        const r = row as unknown as Database["public"]["Tables"]["service_credits"]["Row"] & {
+      const creditRows = (data ?? []) as unknown as Array<
+        Database["public"]["Tables"]["service_credits"]["Row"] & {
           pets: SoldCreditPetJoin | null;
           purchase_groups?: SoldCreditPurchaseGroupJoin;
-        };
+        }
+      >;
+      const groupIds = Array.from(
+        new Set(creditRows.map((row) => row.purchase_group_id).filter((id): id is string => !!id)),
+      );
+      const complimentaryByKey = new Map<string, { total: number; used: number }>();
+      if (groupIds.length > 0) {
+        const { data: complimentary, error: complimentaryErr } = await supabase
+          .from("service_credits")
+          .select("purchase_group_id, pet_id, units_total, units_consumed")
+          .eq("source_type", COMPLIMENTARY_DAYCARE_SOURCE)
+          .neq("status", "revoked")
+          .in("purchase_group_id", groupIds);
+        if (complimentaryErr) throw complimentaryErr;
+        for (const row of complimentary ?? []) {
+          if (!row.purchase_group_id) continue;
+          complimentaryByKey.set(`${row.purchase_group_id}:${row.pet_id}`, {
+            total: row.units_total,
+            used: row.units_consumed,
+          });
+        }
+      }
+
+      return creditRows.map((r) => {
         const pet = r.pets;
         const ownerJoin = pet?.owners ?? null;
         const pg = r.purchase_groups ?? null;
@@ -192,7 +219,10 @@ export function useAllGroomingPackages() {
                 member_tier: ownerMemberTierFromFlags(ownerJoin),
               }
             : null,
-        } satisfies PackageWithDetails;
+          complimentaryDaycare: r.purchase_group_id
+            ? complimentaryByKey.get(`${r.purchase_group_id}:${r.pet_id}`) ?? null
+            : null,
+        } satisfies SoldGroomingPackage;
       });
     },
   });

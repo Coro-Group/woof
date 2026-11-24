@@ -4,6 +4,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { cancelDaycareCheckIn, type DaycareCheckInCancelInput } from "@/lib/daycareCancelCheckIn";
 import { appendDogSizeToNotes } from "@/lib/dogSizeNotes";
 import { composeNotesWithBillingPath, isDaycareHourlyPending, isHourlyBillingDraft, parseDaycareBillingPath, parseHourlyDraftId, type DaycareBillingPath } from "@/lib/daycareSessionMeta";
+import { COMPLIMENTARY_DAYCARE_SOURCE } from "@/lib/complimentaryDaycare";
 import { DAYCARE_CREDIT_CODES } from "@/lib/daycareCredits";
 import {
   isSharedHouseholdDaycarePool,
@@ -115,6 +116,8 @@ export const daycareQueryKeys = {
 export type OwnerActiveCreditRow = CreditRpcRow & {
   pet_id: string;
   pet_name: string;
+  units_total?: number;
+  units_consumed?: number;
 };
 
 /** Credits with remaining balance for every pet on the owner (incl. shared pools via RPC). */
@@ -149,10 +152,85 @@ export function useOwnerActiveCredits(ownerId?: string) {
 
       const flat = rows.flat();
       const seen = new Set<string>();
-      return flat.filter((row) => {
+      const unique = flat.filter((row) => {
         if (seen.has(row.credit_id)) return false;
         seen.add(row.credit_id);
         return true;
+      });
+
+      const complimentaryIds = unique
+        .filter((row) => row.source_type === COMPLIMENTARY_DAYCARE_SOURCE)
+        .map((row) => row.credit_id);
+      if (complimentaryIds.length === 0) return unique;
+
+      const { data: totals, error: totalsErr } = await supabase
+        .from("service_credits")
+        .select("id, units_total, units_consumed")
+        .in("id", complimentaryIds);
+      if (totalsErr) throw totalsErr;
+      const byId = new Map((totals ?? []).map((row) => [row.id, row]));
+      return unique.map((row) => {
+        const extra = byId.get(row.credit_id);
+        return extra
+          ? { ...row, units_total: extra.units_total, units_consumed: extra.units_consumed }
+          : row;
+      });
+    },
+  });
+}
+
+export type ComplimentaryDaycareCredit = {
+  id: string;
+  pet_id: string;
+  units_total: number;
+  units_consumed: number;
+  remaining: number;
+  expires_at: string;
+  package_name: string | null;
+};
+
+/** Complimentary daycare days still remaining for this client's pets. Staff choose to use one. */
+export function useOwnerComplimentaryDaycare(ownerId: string) {
+  return useQuery({
+    queryKey: ["service_credits", "complimentary_daycare", ownerId] as const,
+    enabled: !!ownerId,
+    queryFn: async (): Promise<ComplimentaryDaycareCredit[]> => {
+      const { data: petRows, error: petsErr } = await supabase
+        .from("pets")
+        .select("id")
+        .eq("owner_id", ownerId);
+      if (petsErr) throw petsErr;
+      const petIds = (petRows ?? []).map((pet) => pet.id);
+      if (petIds.length === 0) return [];
+
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from("service_credits")
+        .select("id, pet_id, units_total, units_consumed, expires_at, purchase_groups(package_definitions(display_name))")
+        .in("pet_id", petIds)
+        .eq("source_type", COMPLIMENTARY_DAYCARE_SOURCE)
+        .eq("status", "active")
+        .gte("expires_at", today);
+      if (error) throw error;
+
+      return (data ?? []).flatMap((row) => {
+        const remaining = row.units_total - row.units_consumed;
+        if (remaining <= 0) return [];
+        const packageName =
+          (
+            row as unknown as {
+              purchase_groups?: { package_definitions?: { display_name?: string | null } | null } | null;
+            }
+          ).purchase_groups?.package_definitions?.display_name ?? null;
+        return [{
+          id: row.id,
+          pet_id: row.pet_id,
+          units_total: row.units_total,
+          units_consumed: row.units_consumed,
+          remaining,
+          expires_at: row.expires_at,
+          package_name: packageName,
+        }];
       });
     },
   });

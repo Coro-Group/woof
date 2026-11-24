@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import TopBar from "@/components/dashboard/TopBar";
 import { ReferenceListsSettings } from "@/components/settings/ReferenceListsSettings";
+import { ComplimentaryDaycareSettings } from "@/components/settings/ComplimentaryDaycareSettings";
 import { supabase } from "@/integrations/supabase/client";
 
 type SaveResult = "idle" | "success" | "error";
@@ -156,6 +157,7 @@ const SettingsPage = () => {
           )}
 
           <ReferenceListsSettings />
+          <ComplimentaryDaycareSettings />
 
           {loading ? (
             <div className="flex flex-col gap-8">

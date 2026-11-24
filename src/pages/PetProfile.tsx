@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link, useSearchParams } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parse, differenceInYears, differenceInMonths, parseISO } from "date-fns";
 import { formatIsoDate, isValidIsoDate } from "@/lib/petProfileFields";
+import { COMPLIMENTARY_DAYCARE_SOURCE, complimentaryDaycareSummary } from "@/lib/complimentaryDaycare";
 import TopBar from "@/components/dashboard/TopBar";
 import { usePet, useUpdatePet } from "@/hooks/usePets";
 import { useUpdateAssessment } from "@/hooks/useAssessment";
@@ -893,11 +894,13 @@ const PetProfilePage = () => {
                         <div key={row.id} className="flex items-center justify-between gap-2 text-sm">
                           <div>
                             <span className="font-medium">
-                              {row.units_remaining} {creditServiceLabel(row.service_code)} remaining
+                              {row.source_type === COMPLIMENTARY_DAYCARE_SOURCE
+                                ? complimentaryDaycareSummary(row.units_total, row.units_consumed)
+                                : `${row.units_remaining} ${creditServiceLabel(row.service_code)} remaining`}
                             </span>
                             {" "}— expires {formatIsoDate(row.expires_at, "dd MMM yyyy")}
                           </div>
-                          {row.is_bonus ? (
+                          {row.is_bonus && row.source_type !== COMPLIMENTARY_DAYCARE_SOURCE ? (
                             <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200">
                               Bonus
                             </Badge>

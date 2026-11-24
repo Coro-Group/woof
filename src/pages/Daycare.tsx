@@ -20,6 +20,11 @@ import {
 import { fetchDaycareCheckInPriceRows } from "@/lib/daycareCheckInPricing";
 import { buildDaycareSingleDayLineItems } from "@/lib/daycareInvoiceLines";
 import {
+  complimentaryCreditIdFromChoice,
+  complimentaryDaycareChoiceValue,
+  complimentaryDaycareLine,
+} from "@/lib/complimentaryDaycare";
+import {
   netFromGrossInclusive,
   vatAmountFromGrossInclusive,
   vatLineLabel,
@@ -37,6 +42,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import {
   useDaycarePackages,
+  useOwnerComplimentaryDaycare,
   useConsumeServiceCredit,
   useSessionsByPackage,
   useAddDaycareDay,
@@ -651,6 +657,7 @@ function PlannerTab() {
 
   const { data: pets } = usePets(ownerId ?? "");
   const { data: packages } = useDaycarePackages(ownerId ?? "");
+  const { data: complimentaryCredits } = useOwnerComplimentaryDaycare(ownerId ?? "");
   const selectedPkg = packages?.find((p) => p.id === packageId) ?? null;
   const addDay = useAddDaycareDay();
   const consumeCredit = useConsumeServiceCredit();
@@ -871,6 +878,7 @@ function PlannerTab() {
     const sessionNotes: Record<string, string | null> = {};
     const consumedCreditByPet: Record<string, DaycarePackage> = {};
     const successfullyCreditCovered: string[] = [];
+    const successfullyComplimentary: string[] = [];
     const expiredPackageUsed: string[] = [];
     const fallbackSingleIds: string[] = [];
     const privateFlat = checkInDraft.transport_zone === "dubai_private";
@@ -879,8 +887,15 @@ function PlannerTab() {
       const pet = pets?.find((p) => p.id === petId);
       const petName = pet?.name ?? "Pet";
       const choice = billingChoiceByPet[petId] ?? "hourly";
+      const complimentaryCreditId = complimentaryCreditIdFromChoice(choice);
+      const complimentaryCredit = complimentaryCreditId
+        ? (complimentaryCredits ?? []).find(
+            (credit) => credit.id === complimentaryCreditId && credit.pet_id === petId,
+          ) ?? null
+        : null;
       const isHourlyBilling = choice === "hourly";
-      const chosenPackageId = choice === "single" || isHourlyBilling ? null : choice;
+      const chosenPackageId =
+        complimentaryCredit || choice === "single" || isHourlyBilling ? null : choice;
       const chosenCredit = chosenPackageId ? packages?.find((pkg) => pkg.id === chosenPackageId) : null;
       const billingPath =
         !chosenPackageId && choice === "single"
@@ -894,7 +909,7 @@ function PlannerTab() {
           session_date: checkInDraft.session_date,
           pet_id: petId,
           owner_id: ownerId,
-          package_id: chosenPackageId,
+          package_id: complimentaryCredit?.id ?? chosenPackageId,
           billing_path: billingPath,
           pickup_used: checkInDraft.pickup_used,
           dropoff_used: checkInDraft.dropoff_used,
@@ -907,25 +922,30 @@ function PlannerTab() {
         sessionNotes[petId] = session.notes ?? null;
         successCount += 1;
 
-        if (chosenCredit) {
+        const creditToConsume = complimentaryCredit ?? chosenCredit;
+        if (creditToConsume) {
           const consumeUnits = 1;
           try {
             await consumeCredit.mutateAsync({
-              creditId: chosenCredit.id,
+              creditId: creditToConsume.id,
               units: consumeUnits,
               consumedForRefId: session.id,
               consumedForRefType: "daycare_session",
-              allowExpired: chosenCredit.is_expired,
+              allowExpired: chosenCredit?.is_expired ?? false,
             });
-            consumedCreditByPet[petId] = chosenCredit;
-            successfullyCreditCovered.push(petId);
-            if (chosenCredit.is_expired) {
-              expiredPackageUsed.push(petName);
+            if (complimentaryCredit) {
+              successfullyComplimentary.push(petId);
+            } else if (chosenCredit) {
+              consumedCreditByPet[petId] = chosenCredit;
+              successfullyCreditCovered.push(petId);
+              if (chosenCredit.is_expired) {
+                expiredPackageUsed.push(petName);
+              }
             }
           } catch (error) {
             const message = extractErrorMessage(error);
             failures.push(`${petName}: credit consumption failed (${message}); charging this check-in instead`);
-            if (chosenCredit.service_code === "daycare_hourly") {
+            if (chosenCredit?.service_code === "daycare_hourly") {
               try {
                 await supabase
                   .from("daycare_sessions")
@@ -940,6 +960,9 @@ function PlannerTab() {
                 );
               }
             } else {
+              if (complimentaryCredit) {
+                await supabase.from("daycare_sessions").update({ package_id: null }).eq("id", session.id);
+              }
               fallbackSingleIds.push(petId);
             }
           }
@@ -955,7 +978,8 @@ function PlannerTab() {
       ...fallbackSingleIds,
     ];
     const okCreditIds = successfullyCreditCovered.filter((id) => sessionsCreated[id]);
-    const invoicedPetTotal = okSingleIds.length + okCreditIds.length;
+    const okComplimentaryIds = successfullyComplimentary.filter((id) => sessionsCreated[id]);
+    const invoicedPetTotal = okSingleIds.length + okCreditIds.length + okComplimentaryIds.length;
 
     if (invoicedPetTotal > 0) {
       const zoneLabel = transportZoneLabel(checkInDraft.transport_zone);
@@ -1003,6 +1027,10 @@ function PlannerTab() {
           });
         }
       }
+      for (const petId of okComplimentaryIds) {
+        const petName = pets?.find((p) => p.id === petId)?.name ?? "Pet";
+        lineItems.push(complimentaryDaycareLine(petName));
+      }
 
       const includePickup = checkInDraft.pickup_used;
       const includeDropoff = checkInDraft.dropoff_used;
@@ -1035,8 +1063,9 @@ function PlannerTab() {
       }
 
       const referencePetId =
-        selectedPetIds.find((id) => sessionsCreated[id] && okSingleIds.includes(id)) ??
-        selectedPetIds.find((id) => sessionsCreated[id]);
+        selectedPetIds.find(
+          (id) => sessionsCreated[id] && (okSingleIds.includes(id) || okComplimentaryIds.includes(id)),
+        ) ?? selectedPetIds.find((id) => sessionsCreated[id]);
       const referenceSessionId = referencePetId ? sessionsCreated[referencePetId] : null;
 
       if (referenceSessionId && lineItems.length > 0) {
@@ -1087,7 +1116,7 @@ function PlannerTab() {
       // Only put transport on the hourly draft when there are no single-day dogs
       // in this batch — if single-day dogs exist, transport is already on their invoice.
       const hourlyTransportQty =
-        billTransport && okSingleIds.length === 0
+        billTransport && okSingleIds.length === 0 && okComplimentaryIds.length === 0
           ? transportQuantityForPets(checkInDraft.transport_zone, okHourlyIds.length)
           : 0;
 
@@ -1369,6 +1398,19 @@ function PlannerTab() {
                                       {daycarePackageCreditLabel(pkg)}
                                     </SelectItem>
                                   ))}
+                                  {(complimentaryCredits ?? [])
+                                    .filter((credit) => credit.pet_id === pet.id)
+                                    .map((credit) => (
+                                      <SelectItem
+                                        key={credit.id}
+                                        value={complimentaryDaycareChoiceValue(credit.id)}
+                                        data-testid={`daycare-use-complimentary-${pet.id}`}
+                                      >
+                                        Use complimentary day
+                                        {credit.package_name ? ` (${credit.package_name})` : ""}
+                                        {` · ${credit.remaining} remaining`}
+                                      </SelectItem>
+                                    ))}
                                 </SelectContent>
                               </Select>
                             </div>

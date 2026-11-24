@@ -120,6 +120,7 @@ import { OwnerTransportSection } from "@/components/transport/OwnerTransportSect
 import { pushOwnerHomeToVoltlines } from "@/hooks/useVoltlines";
 import { PinField, emptyPin, pinReady, savedPin, type PinDraft } from "@/components/transport/PinField";
 import { mapsUrl, pinAreaLabel } from "@/lib/transportPin";
+import { COMPLIMENTARY_DAYCARE_SOURCE, complimentaryDaycareSummary } from "@/lib/complimentaryDaycare";
 
 type BookingStatus = Database["public"]["Enums"]["booking_status"];
 type OwnerUpdate = Database["public"]["Tables"]["owners"]["Update"];
@@ -1532,9 +1533,19 @@ const OwnerProfilePage = () => {
             <div className="space-y-3">
               <Card>
                 <CardContent className="pt-4 space-y-2">
+                  {ownerActiveCredits
+                    .filter((row) => row.source_type === COMPLIMENTARY_DAYCARE_SOURCE)
+                    .map((row) => (
+                      <p key={row.credit_id} className="text-sm" data-testid={`owner-complimentary-daycare-${row.credit_id}`}>
+                        <span className="font-medium">{row.package_name ?? "Package"} · {row.pet_name}</span>
+                        {" "}
+                        {complimentaryDaycareSummary(row.units_total ?? row.units_remaining, row.units_consumed ?? 0)}
+                      </p>
+                    ))}
                   {Object.entries(
                     ownerActiveCredits.reduce<Record<string, { total: number; byPet: Record<string, number> }>>(
                       (acc, row) => {
+                        if (row.source_type === COMPLIMENTARY_DAYCARE_SOURCE) return acc;
                         const key = row.service_code;
                         if (!acc[key]) acc[key] = { total: 0, byPet: {} };
                         acc[key].total += row.units_remaining;
@@ -1574,7 +1585,9 @@ const OwnerProfilePage = () => {
                           <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
                             {petCredits.map((row) => (
                               <li key={row.credit_id}>
-                                {row.package_name ?? "Package"} · {row.units_remaining} {serviceCodeLabel(row.service_code)} · exp {row.expires_at}
+                                {row.source_type === COMPLIMENTARY_DAYCARE_SOURCE
+                                  ? `${row.package_name ?? "Package"} · ${complimentaryDaycareSummary(row.units_total ?? row.units_remaining, row.units_consumed ?? 0)}`
+                                  : `${row.package_name ?? "Package"} · ${row.units_remaining} ${serviceCodeLabel(row.service_code)} · exp ${row.expires_at}`}
                               </li>
                             ))}
                           </ul>

@@ -2339,6 +2339,7 @@ export type Database = {
           applicable_species: Database["public"]["Enums"]["species"][]
           category: string
           code: string
+          complimentary_daycare_days: number
           created_at: string
           description: string | null
           display_name: string
@@ -2353,6 +2354,7 @@ export type Database = {
           applicable_species?: Database["public"]["Enums"]["species"][]
           category: string
           code: string
+          complimentary_daycare_days?: number
           created_at?: string
           description?: string | null
           display_name: string
@@ -2367,6 +2369,7 @@ export type Database = {
           applicable_species?: Database["public"]["Enums"]["species"][]
           category?: string
           code?: string
+          complimentary_daycare_days?: number
           created_at?: string
           description?: string | null
           display_name?: string
@@ -4780,6 +4783,10 @@ export type Database = {
           purchase_group_id: string
           total_amount_aed: number
         }[]
+      }
+      set_package_complimentary_daycare_days: {
+        Args: { p_days: number; p_package_def_id: string }
+        Returns: number
       }
       resolve_woof_service_rate: {
         Args: {

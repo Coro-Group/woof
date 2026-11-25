@@ -766,6 +766,19 @@ export function useRequestOffers(requestIds: string[]) {
   });
 }
 
+/**
+ * The review flag a quote with no times leaves on the request. The prefix is stable so a
+ * later Offer clears the flag it raised itself and never one somebody else raised (a
+ * missing pin, a note from reception).
+ */
+export const NO_TIMES_REVIEW_PREFIX = "The hub found no times";
+
+/** The hub's own words for a quote that offered nothing, for the Inbox to show. */
+export function noTimesReason(quote: HubQuote): string {
+  const why = quote.reason?.trim() || (quote.outcome && quote.outcome !== "offer" ? quote.outcome : null);
+  return `${NO_TIMES_REVIEW_PREFIX} for the hour asked for — dispatch to arrange${why ? ` (${why})` : ""}`;
+}
+
 /** One hub quote stored as offer rows (AE persistOffersOnRequest). */
 export function offerRowsOf(requestId: string, quote: HubQuote, actor: string | null) {
   return quote.offers.map((o, i) => ({
@@ -807,7 +820,7 @@ export function useOfferRequest() {
   const invalidate = useInvalidateTransport();
   return useMutation({
     mutationFn: async ({ legs, actor }: { legs: OfferLeg[]; actor: string }) => {
-      const results: Array<{ requestId: string; quote: HubQuote | null; error: string | null }> = [];
+      const results: Array<{ requestId: string; quote: HubQuote | null; offers: number; error: string | null }> = [];
       for (const leg of legs) {
         try {
           const quote = await hubApi<HubQuote>({
@@ -832,16 +845,40 @@ export function useOfferRequest() {
           if (rows.length) {
             const { error: insErr } = await supabase.from("transport_request_offer").insert(rows);
             if (insErr) throw insErr;
+            const { error: upErr } = await supabase
+              .from("transport_request")
+              .update({ status: "offered", offered_by: actor, offered_at: new Date().toISOString(), updated_by: actor })
+              .eq("id", leg.requestId)
+              .in("status", ["received", "offered"]);
+            if (upErr) throw upErr;
+            // Times came back, so a "no times" flag from an earlier Offer is stale.
+            const { error: clearErr } = await supabase
+              .from("transport_request")
+              .update({ needs_review: false, review_reason: null, updated_by: actor })
+              .eq("id", leg.requestId)
+              .like("review_reason", `${NO_TIMES_REVIEW_PREFIX}%`);
+            if (clearErr) throw clearErr;
+          } else {
+            // Nothing to offer. Never leave the request on "Offered" with an empty list —
+            // there would be nothing to accept and no Approve — so re-open it and keep the
+            // hub's words, which is what the Inbox and the card then show.
+            const { error: upErr } = await supabase
+              .from("transport_request")
+              .update({
+                status: "received",
+                offered_by: null,
+                offered_at: null,
+                needs_review: true,
+                review_reason: noTimesReason(quote),
+                updated_by: actor,
+              })
+              .eq("id", leg.requestId)
+              .in("status", ["received", "offered"]);
+            if (upErr) throw upErr;
           }
-          const { error: upErr } = await supabase
-            .from("transport_request")
-            .update({ status: "offered", offered_by: actor, offered_at: new Date().toISOString(), updated_by: actor })
-            .eq("id", leg.requestId)
-            .in("status", ["received", "offered"]);
-          if (upErr) throw upErr;
-          results.push({ requestId: leg.requestId, quote, error: null });
+          results.push({ requestId: leg.requestId, quote, offers: rows.length, error: null });
         } catch (err) {
-          results.push({ requestId: leg.requestId, quote: null, error: (err as Error).message });
+          results.push({ requestId: leg.requestId, quote: null, offers: 0, error: (err as Error).message });
         }
       }
       return results;

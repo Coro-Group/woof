@@ -13,6 +13,7 @@ import {
   useCurrentStaffName,
   useDecideTransportRequest,
   useOfferRequest,
+  NO_TIMES_REVIEW_PREFIX,
   useAdoptVoltlinesHomePin,
   useRequestOffers,
   useSameDayConflicts,
@@ -240,9 +241,13 @@ function DetailBody({
   const pinless = !!noPin;
   const alreadyOffered = rows.some((r) => r.status === "offered");
   const legsWithoutTime = openLegs.filter((r) => !r.requested_slot_id);
-  // Every option on every offered leg would push someone out: nothing here can accept it.
+  // An Offer that came back with no times at all: the hub left its reason on the request.
+  const noTimesFromHub = rows.some((r) => r.needs_review && r.review_reason?.startsWith(NO_TIMES_REVIEW_PREFIX));
+  const quoted = alreadyOffered || noTimesFromHub;
+  // Every option on every offered leg would push someone out, or the hub offered none:
+  // nothing here can accept it.
   const nothingToAccept =
-    alreadyOffered && openLegs.every((r) => (offersByLeg.get(r.id) ?? []).every((o) => (o.displaces ?? 0) > 0));
+    quoted && openLegs.every((r) => (offersByLeg.get(r.id) ?? []).every((o) => (o.displaces ?? 0) > 0));
   // No transport profile (or no pin) is fixed on the request, never booked around (23 Nov 2026).
   // Book by hand is left only for a day where every option would push someone out.
   const byHand = offerable && nothingToAccept && !(notOnVoltlines || pinless);
@@ -278,8 +283,25 @@ function DetailBody({
       {
         onSuccess: (results) => {
           const failed = results.find((x) => x.error);
-          if (failed) toast.error(failed.error);
-          else toast.success("Offers ready — accept the option the customer takes.");
+          if (failed) {
+            toast.error(failed.error);
+            return;
+          }
+          if (!results.length) return;
+          // A quote can come back with nothing to offer. Say so — it used to read as a success.
+          const empty = results.filter((r) => !r.offers);
+          if (empty.length === results.length) {
+            toast.warning(
+              results[0]?.quote?.reason?.trim() ||
+                "The hub found no times for the hour asked for. Try another hour and Offer again, or Book by hand.",
+            );
+          } else if (empty.length) {
+            toast.warning(
+              `Offers ready for ${results.length - empty.length} of ${results.length} trips. The hub found no times for the rest.`,
+            );
+          } else {
+            toast.success("Offers ready — accept the option the customer takes.");
+          }
         },
         onError: (e) => toast.error((e as Error).message),
       },
@@ -578,6 +600,12 @@ function DetailBody({
           {offerable && legsWithoutTime.length > 0 && !dirty && (
             <p className={`text-xs ${TONE.warn.text}`}>Set the time they asked for on each trip above, save, then Offer.</p>
           )}
+          {offerable && noTimesFromHub && !dirty && legsWithoutTime.length === 0 && (
+            <p className={`text-xs ${TONE.warn.text}`} data-testid="transport-request-no-times">
+              The hub offered no times for the hour asked for. Change the time above and Offer again, or Book by hand to put it on
+              the schedule for dispatch to arrange.
+            </p>
+          )}
           {offerable && (notOnVoltlines || pinless) && owner && (
             <TransportProfileStep
               ownerId={ownerId}
@@ -604,7 +632,7 @@ function DetailBody({
                   data-testid="transport-request-offer"
                 >
                   {offerRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                  {alreadyOffered ? "Offer again" : "Offer"}
+                  {quoted ? "Offer again" : "Offer"}
                 </Button>
               )}
               {byHand && (

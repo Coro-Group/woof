@@ -96,10 +96,30 @@ async function quote(db, body, retried = false) {
 const usablePin = (lat, lng) =>
   typeof lat === "number" && typeof lng === "number" && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 
+/** Pin sources that are copies, not a person's choice in Woof. */
+const COPIED_PIN_SOURCES = new Set(["voltlines", "hub"]);
+
 /**
- * What AE learned about the dogs it was sent (response `links`). Fills gaps only:
- * a passenger id the pet lacks, a pin or address the owner lacks. Never overwrites,
- * and never fails the sync — the hub has already taken the picture by now.
+ * Whether the owner takes AE's pin. Always when the owner has none. Over one the owner
+ * has, only when AE's dispatch saved that pin (link.pinSetAt) and Woof's is a copy or
+ * older (Pepsi, 25 Nov 2026: the owner page took the old Voltlines pin the morning after
+ * dispatch moved his door, and Woof kept planning him at the old one).
+ */
+export function takesHubPin(owner, link) {
+  if (!usablePin(link?.lat, link?.lng)) return false;
+  if (owner.pin_lat == null && owner.pin_lng == null) return true;
+  if (!link.pinSetAt || Number.isNaN(Date.parse(link.pinSetAt))) return false;
+  if (owner.pin_lat === link.lat && owner.pin_lng === link.lng) return false;
+  if (COPIED_PIN_SOURCES.has(owner.pin_source)) return true;
+  const ownAt = owner.pin_updated_at ? Date.parse(owner.pin_updated_at) : NaN;
+  return !(ownAt > Date.parse(link.pinSetAt));
+}
+
+/**
+ * What AE learned about the dogs it was sent (response `links`). Fills gaps: a
+ * passenger id the pet lacks, an address the owner lacks, a pin the owner lacks — and
+ * puts a pin AE's dispatch saved over Woof's copy (takesHubPin). Never fails the sync:
+ * the hub has already taken the picture by now.
  */
 async function applyLinks(db, links, pets) {
   const result = { linked: 0, pinned: 0, mismatched: [] };
@@ -126,17 +146,20 @@ async function applyLinks(db, links, pets) {
     const owner = pet.owner;
     const ownerId = pet.owner_id;
     if (!owner || !ownerId) continue;
-    if (owner.pin_lat == null && owner.pin_lng == null && !pinnedOwners.has(ownerId) && usablePin(link.lat, link.lng)) {
+    if (!pinnedOwners.has(ownerId) && takesHubPin(owner, link)) {
       pinnedOwners.add(ownerId);
-      const { error } = await db
+      const empty = owner.pin_lat == null && owner.pin_lng == null;
+      let write = db
         .from("owners")
         .update({ pin_lat: link.lat, pin_lng: link.lng, pin_source: "hub", pin_updated_at: new Date().toISOString() })
-        .eq("id", ownerId)
-        .is("pin_lat", null)
-        .is("pin_lng", null);
+        .eq("id", ownerId);
+      // Only over what was read: a pin someone saves in Woof meanwhile is not overwritten.
+      write = empty ? write.is("pin_lat", null).is("pin_lng", null) : write.eq("pin_lat", owner.pin_lat).eq("pin_lng", owner.pin_lng);
+      const { error } = await write;
       if (!error) {
         owner.pin_lat = link.lat;
         owner.pin_lng = link.lng;
+        owner.pin_source = "hub";
         result.pinned += 1;
       }
     }
@@ -198,7 +221,7 @@ async function sync(db, extraPetIds = []) {
   for (let i = 0; i < ids.length; i += 200) {
     const { data, error } = await db
       .from("pets")
-      .select("id, name, owner_id, voltlines_passenger_id, driver_note, owners(first_name, last_name, phone, email, address, transport_notes, pin_lat, pin_lng)")
+      .select("id, name, owner_id, voltlines_passenger_id, driver_note, owners(first_name, last_name, phone, email, address, transport_notes, pin_lat, pin_lng, pin_source, pin_updated_at)")
       .in("id", ids.slice(i, i + 200));
     if (error) throw new HttpError(500, error.message);
     for (const p of data ?? []) pets.set(p.id, { ...p, owner: p.owners });

@@ -197,6 +197,8 @@ describe("allowPinless — dogs with no Voltlines profile (23 Nov 2026)", () => 
         site: "AQ",
         lat: 25.0,
         lng: 55.2,
+        pinUpdatedAt: null,
+        pinSource: null,
         addressLine: "Villa 3, Springs 4",
       },
     ]);

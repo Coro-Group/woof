@@ -244,6 +244,10 @@ export function buildHubSync({ from, to, regulars, days, pets, openPets = [], al
       site: WOOF_SITE,
       lat: pet.owner?.pin_lat ?? null,
       lng: pet.owner?.pin_lng ?? null,
+      // When and how the pin was set: AE keeps a pin its dispatch saved over one that is
+      // older, or only a copy ("voltlines" directory, "hub" from AE itself).
+      pinUpdatedAt: pet.owner?.pin_lat != null ? pet.owner?.pin_updated_at ?? null : null,
+      pinSource: pet.owner?.pin_lat != null ? pet.owner?.pin_source ?? null : null,
       ...(allowPinless ? ownerContact(pet.owner) : {}),
       ...clientHome(pet),
     };

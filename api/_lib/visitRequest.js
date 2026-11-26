@@ -15,6 +15,9 @@ const INTEREST_ALIASES = {
   pickup: "transport",
 };
 
+/** Where a request was sent from: the brand's own page, or coro.ae's planner (/inquire). */
+export const SOURCES = ["website", "coro.ae"];
+
 function clean(v, max) {
   return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max + 1);
 }
@@ -60,9 +63,14 @@ export function parseVisitRequest(body) {
 
   const sourcePage = clean(b.page, 300);
 
+  // Where it was sent from: the brand's own page ("website") or coro.ae's planner.
+  const rawSource = clean(b.source, 20).toLowerCase();
+  const source = SOURCES.includes(rawSource) ? rawSource : "website";
+
   return {
     ok: true,
     value: {
+      source,
       contactName,
       phone,
       petName: petName || null,

@@ -20,7 +20,7 @@ describe("parseVisitRequest", () => {
   it("cleans the fields and normalises the phone", () => {
     expect(parseVisitRequest(good)).toEqual({
       ok: true,
-      value: { contactName: "Sara Khan", phone: "+971501234567", petName: "Luna", interest: null, notes: null, sourcePage: null },
+      value: { source: "website", contactName: "Sara Khan", phone: "+971501234567", petName: "Luna", interest: null, notes: null, sourcePage: null },
     });
     expect(parseVisitRequest({ ...good, petName: undefined, dogName: "Rex" }).value.petName).toBe("Rex");
   });
@@ -144,5 +144,13 @@ describe("visitWhatsAppUrl", () => {
     expect(decodeURIComponent(url!.split("text=")[1])).toContain("Hi Sara");
     expect(decodeURIComponent(url!.split("text=")[1])).toContain("free assessment and daycare trial");
     expect(visitWhatsAppUrl({ phone: "", contact_name: "A", pet_name: null })).toBeNull();
+  });
+});
+
+describe("request source", () => {
+  it("records coro.ae when the coro.ae planner sends it, else the brand's own website", () => {
+    expect(parseVisitRequest({ ...good, source: "coro.ae" }).value.source).toBe("coro.ae");
+    expect(parseVisitRequest({ ...good, source: "elsewhere" }).value.source).toBe("website");
+    expect(parseVisitRequest(good).value.source).toBe("website");
   });
 });

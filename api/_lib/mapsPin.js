@@ -31,9 +31,38 @@ const MAPS_HEADERS = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   Accept: "text/html",
   "Accept-Language": "en",
-  // Without this, Google answers a datacenter with a consent page that has no pin.
-  Cookie: "CONSENT=YES+cb.20210720-07-p0.en+FX+410",
+  // Without these, Google answers a datacenter (above all one in Europe) with its
+  // cookie-consent page, which has no pin. CONSENT is the old form; SOCS is the
+  // one Google reads since 2023 ("reject all", English).
+  Cookie: "SOCS=CAESHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzIaAmVuIAEaBgiA_LyaBg; CONSENT=YES+cb.20210720-07-p0.en+FX+410",
 };
+
+/**
+ * Where a consent.google.com interstitial would have sent us. Google parks the
+ * real Maps URL in `continue`; reading it from there is the same link the client
+ * shared, not a guess. Any other URL comes back unchanged.
+ */
+export function unwrapConsentUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url ?? "").trim());
+  } catch {
+    return url ?? null;
+  }
+  if (!/^consent\.google\./i.test(parsed.hostname)) return url;
+  const next = parsed.searchParams.get("continue");
+  return next || url;
+}
+
+/** Host and path of a URL, for the log: where a link went, never the place it names. */
+function hopOf(url) {
+  try {
+    const u = new URL(String(url));
+    return `${u.hostname}${u.pathname}`;
+  } catch {
+    return "unparseable";
+  }
+}
 
 /** The same rule a Voltlines pin is judged by. */
 function withinServiceArea(lat, lng) {
@@ -114,7 +143,7 @@ export function coordinateFromText(text) {
  * Follow a shortened Maps link far enough to read the pin out of the long URL it
  * points at. HEAD is enough when Google puts the pin in the redirect. A share
  * from the Maps app often lands on a place name instead (`?q=Al+Jawhara+Tower`),
- * and the coordinates only exist on the page — see coordinateFromMapsPage.
+ * and the coordinates only exist on the page — see placeCardUrl.
  */
 export async function resolveShortMapsLink(url, { fetchImpl = fetch, timeoutMs = 6000 } = {}) {
   const target = String(url ?? "").trim();
@@ -156,29 +185,46 @@ export function isMapsPageUrl(url) {
 }
 
 /**
- * The place a Maps share page is actually showing.
+ * The place card a Maps share page loads for the place it names, or null.
  *
- * Clients send maps.app.goo.gl links. Those often expand to a street name and a
- * plus code, with no latitude in the URL. Google still stamps the place on the
- * page: the preview image is a static map centred on it (`center=lat,lng`), and
- * the same point is in the preview blob as `!2d<lng>!3d<lat>`. That center is
- * the dropped place, not a geocode of the words in the link.
+ * Clients send maps.app.goo.gl links that expand to a place name plus a feature id
+ * (`ftid=0x…:0x…`), with no latitude anywhere in the URL. The page Google serves for
+ * it does NOT carry the place: its preview image (`staticmap?center=`) and camera
+ * (`!2d…!3d…`) are where Google thinks the VISITOR is — Mumbai from a Mumbai server,
+ * the office from the office (found 26 Nov 2026; reading those put the pin wherever
+ * the request came from). What the page does carry is a link to the place card,
+ * `/maps/preview/place?…pb=!1s<feature id>…`, which the browser loads next.
+ *
+ * Only a card keyed by a feature id is followed: that is the one place the client
+ * shared. A link that names words only (`q=Samana+Greens`) would be a search, and
+ * nothing is guessed.
  */
-export function coordinateFromMapsPage(html) {
-  const raw = String(html ?? "");
-  if (!raw.trim()) return null;
+export function placeCardUrl(html) {
+  const href = String(html ?? "").match(/<link href="(\/maps\/preview\/place\?[^"]+)"/)?.[1];
+  if (!href) return null;
+  const path = href.replace(/&amp;/g, "&");
+  const pb = path.replace(/%21/gi, "!").replace(/%3A/gi, ":");
+  if (!/!1s0x[0-9a-f]+:0x[0-9a-f]+/i.test(pb)) return null;
+  return `https://www.google.com${path}`;
+}
 
-  const center = raw.match(/staticmap\?center=(-?\d+(?:\.\d+)?)(?:%2C|,)(-?\d+(?:\.\d+)?)/i);
-  if (center && withinServiceArea(Number(center[1]), Number(center[2]))) {
-    return { lat: Number(center[1]), lng: Number(center[2]), source: "place_pin" };
+/**
+ * The place's own coordinate from a place card (JSON behind a `)]}'` guard): the
+ * `[null, null, lat, lng]` at [6][9], where Maps keeps a place's location.
+ */
+export function coordinateFromPlaceCard(text) {
+  let body;
+  try {
+    body = JSON.parse(String(text ?? "").replace(/^\)\]\}'\s*/, ""));
+  } catch {
+    return null;
   }
-
-  const blob = raw.replace(/%21/gi, "!");
-  const preview = blob.match(/!2d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/);
-  if (preview && withinServiceArea(Number(preview[2]), Number(preview[1]))) {
-    return { lat: Number(preview[2]), lng: Number(preview[1]), source: "place_pin" };
-  }
-  return null;
+  const at = body?.[6]?.[9];
+  if (!Array.isArray(at)) return null;
+  const lat = Number(at[2]);
+  const lng = Number(at[3]);
+  if (typeof at[2] !== "number" || typeof at[3] !== "number" || !withinServiceArea(lat, lng)) return null;
+  return { lat, lng, source: "place_pin" };
 }
 
 async function readMapsPage(url, { fetchImpl = fetch, timeoutMs = 8000 } = {}) {
@@ -209,25 +255,59 @@ async function readMapsPage(url, { fetchImpl = fetch, timeoutMs = 8000 } = {}) {
  * nothing to plan with, which is the honest outcome.
  */
 export async function pinFromAddress(text, options = {}) {
+  // `trace` (optional array) collects where each hop landed, host and path only,
+  // so a refused link can be explained from the logs.
+  const trace = Array.isArray(options.trace) ? options.trace : [];
   const direct = coordinateFromText(text);
   if (direct) return direct;
   const link = String(text ?? "").trim().match(/https?:\/\/\S+/)?.[0];
-  if (!link) return null;
+  if (!link) {
+    trace.push("no link");
+    return null;
+  }
 
   let pageUrl = null;
   if (isShortMapsLink(link)) {
-    const expanded = await resolveShortMapsLink(link, options);
-    if (!expanded) return null;
+    const raw = await resolveShortMapsLink(link, options);
+    trace.push(`short → ${raw ? hopOf(raw) : "no answer"}`);
+    if (!raw) return null;
+    // From Europe the short link can end on Google's consent page; the Maps URL
+    // it was heading for is in its `continue` parameter.
+    const expanded = unwrapConsentUrl(raw);
+    if (expanded !== raw) trace.push(`consent → ${hopOf(expanded)}`);
     const fromUrl = coordinateFromText(expanded);
     if (fromUrl) return fromUrl;
     pageUrl = expanded;
   } else if (isMapsPageUrl(link)) {
     pageUrl = link;
   }
-  if (!pageUrl) return null;
-  const page = await readMapsPage(pageUrl, options);
-  if (!page) return null;
-  // A redirect often lands on a URL that finally contains the pin, including
-  // when the first hop was only a place name.
-  return coordinateFromText(page.url) || coordinateFromMapsPage(page.html);
+  if (!pageUrl || !isMapsPageUrl(pageUrl)) {
+    trace.push(`not a Maps page${pageUrl ? `: ${hopOf(pageUrl)}` : ""}`);
+    return null;
+  }
+
+  // Two tries at most: the page, and once more if Google parked it behind consent.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const page = await readMapsPage(pageUrl, options);
+    trace.push(`page → ${page ? `${hopOf(page.url)} (${page.html.length} chars)` : "no answer"}`);
+    if (!page) return null;
+    // A redirect often lands on a URL that finally contains the pin, including
+    // when the first hop was only a place name.
+    const fromUrl = coordinateFromText(page.url);
+    if (fromUrl) return fromUrl;
+    const card = placeCardUrl(page.html);
+    if (card) {
+      const res = await readMapsPage(card, options);
+      const pin = res ? coordinateFromPlaceCard(res.html) : null;
+      trace.push(`place card → ${res ? (pin ? "pin" : `no pin (${res.html.length} chars)`) : "no answer"}`);
+      return pin;
+    }
+    const next = unwrapConsentUrl(page.url);
+    if (next === page.url || !isMapsPageUrl(next)) {
+      trace.push("no place card");
+      return null;
+    }
+    pageUrl = next;
+  }
+  return null;
 }

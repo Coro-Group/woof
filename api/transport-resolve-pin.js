@@ -54,8 +54,11 @@ export default async function handler(req, res) {
   const text = String(body.text ?? "").trim();
   if (!text) return json(res, 400, { error: "Paste a Google Maps link" });
 
-  const pin = await pinFromAddress(text);
+  const trace = [];
+  const pin = await pinFromAddress(text, { trace });
   if (!pin) {
+    // Hosts and paths only — the link itself names a client's home.
+    console.warn("[resolve-pin] no pin", { region: process.env.VERCEL_REGION ?? null, trace });
     return json(res, 422, {
       error: "No usable pin in that link. Drop a pin in Google Maps and share it, or type \"lat, lng\".",
     });

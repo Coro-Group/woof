@@ -6,6 +6,7 @@ import { useAllGroomingPackages, type SoldGroomingPackage } from "@/hooks/useGro
 import { complimentaryDaycareSummary } from "@/lib/complimentaryDaycare";
 import { serviceGrantLabel } from "@/lib/packageCatalog";
 import { exportDaycarePackagesToExcel } from "@/lib/daycarePackagesExport";
+import { GroomingPackageDetailSheet } from "@/components/grooming/GroomingPackageDetailSheet";
 import { PurchasePackageDialog } from "@/components/packages/PurchasePackageDialog";
 import { OwnerSearchPopover } from "@/components/billing/OwnerSearchPopover";
 import { useOwner } from "@/hooks/useOwners";
@@ -59,7 +60,13 @@ function soldPackageMatchesSearch(pkg: SoldGroomingPackage, query: string): bool
   return ownerName.includes(q) || petName.includes(q) || pkgName.includes(q);
 }
 
-function GroomingPackageCard({ pkg }: { pkg: SoldGroomingPackage }) {
+function GroomingPackageCard({
+  pkg,
+  onOpen,
+}: {
+  pkg: SoldGroomingPackage;
+  onOpen: (pkg: SoldGroomingPackage) => void;
+}) {
   const remaining = pkg.total_days - pkg.days_used;
   const pct = Math.min(100, (pkg.days_used / Math.max(1, pkg.total_days)) * 100);
   const isExhausted = remaining <= 0;
@@ -68,7 +75,16 @@ function GroomingPackageCard({ pkg }: { pkg: SoldGroomingPackage }) {
 
   return (
     <Card
-      className={`transition-shadow hover:shadow-md ${isExhausted ? "opacity-60" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(pkg)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen(pkg);
+        }
+      }}
+      className={`cursor-pointer transition-shadow hover:shadow-md ${isExhausted ? "opacity-60" : ""}`}
       data-testid={`grooming-sold-card-${pkg.id}`}
     >
       <CardContent className="p-4 space-y-3">
@@ -146,6 +162,7 @@ export function GroomingPackagesTab() {
   const [soldStatus, setSoldStatus] = useState<SoldStatusFilter>("all");
   const [soldPackageFilter, setSoldPackageFilter] = useState<string>("all");
   const [soldSearch, setSoldSearch] = useState("");
+  const [openPackage, setOpenPackage] = useState<SoldGroomingPackage | null>(null);
 
   const packageNameOptions = useMemo(() => {
     const names = new Set<string>();
@@ -278,10 +295,12 @@ export function GroomingPackagesTab() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {soldFiltered.map((pkg) => (
-            <GroomingPackageCard key={pkg.id} pkg={pkg} />
+            <GroomingPackageCard key={pkg.id} pkg={pkg} onOpen={setOpenPackage} />
           ))}
         </div>
       )}
+
+      <GroomingPackageDetailSheet pkg={openPackage} onOpenChange={(open) => { if (!open) setOpenPackage(null); }} />
 
       <Dialog open={sellOpen} onOpenChange={setSellOpen}>
         <DialogContent className="sm:max-w-md">

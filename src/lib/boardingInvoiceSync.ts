@@ -12,6 +12,12 @@ import { formatAed, roundAed } from "@/lib/money";
 import { invoiceDueDateAtCheckIn } from "@/lib/invoiceDueDate";
 import { invoiceDisplayTotals } from "@/lib/vatConfig";
 import { withoutSupersededInvoices } from "@/lib/invoiceStatus";
+import { isDiscountAdjustmentType, resolveInvoiceAmountPaid } from "@/lib/invoiceRecalc";
+import {
+  reapplyInvoiceDiscount,
+  stayDiscountHistoryNote,
+  type ReapplyDiscountAdjustment,
+} from "@/lib/reapplyInvoiceDiscount";
 
 type InvoiceRow = Database["public"]["Tables"]["invoices"]["Row"];
 type LineRow = Database["public"]["Tables"]["invoice_line_items"]["Row"];
@@ -61,6 +67,152 @@ function bookingPetsForInvoice(
     id: bp.pet_id,
     name: bp.pets?.name ?? "Pet",
   }));
+}
+
+function mergedLineSubtotal(lines: BoardingInvoiceLineItem[]): number {
+  return roundAed(lines.reduce((sum, line) => sum + line.unitPrice * Math.max(1, line.quantity), 0));
+}
+
+type StayDiscountSnapshot = {
+  previousSubtotal: number;
+  discountPct: number;
+  discountAmount: number;
+  status: string;
+  amountPaid: number;
+  vatAed: number | null;
+  adjustments: ReapplyDiscountAdjustment[];
+};
+
+function snapshotKeepsDiscount(snapshot: StayDiscountSnapshot): boolean {
+  if (snapshot.discountAmount > 0.009 || snapshot.discountPct > 0) return true;
+  return snapshot.adjustments.some(
+    (row) =>
+      row.adjustment_type !== "double_occupancy_discount" &&
+      isDiscountAdjustmentType(row.adjustment_type) &&
+      Math.abs(Number(row.adjusted_amount) || 0) > 0.009,
+  );
+}
+
+/** Read the approved discount before night lines are replaced. The occupancy RPC can zero it. */
+async function loadStayDiscountSnapshot(
+  invoice: InvoiceRow,
+  bookingId: string,
+): Promise<StayDiscountSnapshot> {
+  const { error: linkErr } = await getSupabase()
+    .from("billing_adjustments")
+    .update({ invoice_id: invoice.id })
+    .eq("booking_id", bookingId)
+    .is("invoice_id", null)
+    .in("adjustment_type", [
+      "discount_override",
+      "fee_waived",
+      "goodwill_credit",
+      "adjustment",
+      "double_occupancy_discount",
+    ]);
+  if (linkErr) throw linkErr;
+
+  const { data, error } = await getSupabase()
+    .from("billing_adjustments")
+    .select("id, adjustment_type, adjusted_amount, reason, approved_by")
+    .eq("invoice_id", invoice.id);
+  if (error) throw error;
+
+  return {
+    previousSubtotal: roundAed(invoice.subtotal ?? 0),
+    discountPct: Number(invoice.discount_pct) || 0,
+    discountAmount: roundAed(invoice.discount_amount ?? 0),
+    status: invoice.status,
+    amountPaid: await resolveInvoiceAmountPaid(invoice, getSupabase()),
+    vatAed: invoice.vat_aed,
+    adjustments: (data ?? []).map((row) => ({
+      id: row.id,
+      adjustment_type: row.adjustment_type,
+      adjusted_amount: row.adjusted_amount,
+      reason: row.reason,
+      approved_by: row.approved_by,
+    })),
+  };
+}
+
+/**
+ * Put the discount taken before the rebuild back onto the new night subtotal.
+ * Percent overrides are recalculated. Fixed amounts stay. A history row records it.
+ */
+async function reapplyStayDiscount(
+  invoiceId: string,
+  snapshot: StayDiscountSnapshot,
+  newSubtotal: number,
+): Promise<void> {
+  if (!snapshotKeepsDiscount(snapshot)) return;
+
+  const { data: currentRows, error: loadErr } = await getSupabase()
+    .from("billing_adjustments")
+    .select("id, adjustment_type, adjusted_amount, reason, approved_by")
+    .eq("invoice_id", invoiceId);
+  if (loadErr) throw loadErr;
+
+  const current = new Map((currentRows ?? []).map((row) => [row.id, row]));
+  for (const row of snapshot.adjustments) {
+    if (!row.id || current.has(row.id) || row.adjustment_type === "double_occupancy_discount") continue;
+    current.set(row.id, {
+      id: row.id,
+      adjustment_type: row.adjustment_type,
+      adjusted_amount: row.adjusted_amount ?? null,
+      reason: row.reason ?? null,
+      approved_by: row.approved_by ?? null,
+    });
+  }
+
+  const priced = reapplyInvoiceDiscount({
+    previousSubtotal: snapshot.previousSubtotal,
+    subtotal: newSubtotal,
+    discountPct: snapshot.discountPct,
+    discountAmount: snapshot.discountAmount,
+    adjustments: [...current.values()],
+    amountPaid: snapshot.amountPaid,
+    currentStatus: snapshot.status,
+  });
+
+  const { error: updateErr } = await getSupabase()
+    .from("invoices")
+    .update({
+      subtotal: priced.subtotal,
+      discount_amount: priced.discountAmount,
+      discount_pct: priced.discountPct,
+      total: priced.total,
+      vat_aed: snapshot.vatAed == null ? null : priced.vatAed,
+      status: priced.status as Database["public"]["Enums"]["invoice_status"],
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", invoiceId);
+  if (updateErr) throw updateErr;
+
+  for (const change of priced.adjustmentAmounts) {
+    if (!change.id) continue;
+    const { error } = await getSupabase()
+      .from("billing_adjustments")
+      .update({ adjusted_amount: change.adjustedAmount })
+      .eq("id", change.id);
+    if (error) throw error;
+  }
+
+  const note = stayDiscountHistoryNote({
+    previousDiscountAmount: snapshot.discountAmount,
+    previousDiscountPct: priced.discountPct,
+    nextDiscountAmount: priced.discountAmount,
+  });
+  if (!note) return;
+
+  const { error: noteErr } = await getSupabase().from("invoice_amendments").insert({
+    invoice_id: invoiceId,
+    field_changed: note.fieldChanged,
+    old_value: note.oldValue,
+    new_value: note.newValue,
+    reason: note.reason,
+    amended_by: "system",
+  });
+  if (noteErr) throw noteErr;
 }
 
 /**
@@ -132,6 +284,7 @@ export async function syncBoardingBookingInvoice(
 
   if (linesErr) throw linesErr;
 
+  const discountSnapshot = await loadStayDiscountSnapshot(invoice, bookingId);
   const preserved = (existingLines ?? []).filter((row) => !isBoardingNightLineItem(row));
   const nightLines = await buildBoardingNightLineItems({
     roomId: booking.room_id,
@@ -167,10 +320,8 @@ export async function syncBoardingBookingInvoice(
     if (insErr) throw insErr;
   }
 
-  // Money fields are rewritten by apply_double_occupancy_discount, which
-  // re-applies approved discounts in the same transaction. Do not write
-  // total or discount_amount here — that used to leave the invoice at the
-  // pre-discount subtotal when the occupancy amount was zero.
+  // Due date only. The occupancy RPC can zero an approved discount; the
+  // snapshot taken before the rebuild is written back afterwards.
   const { error: dueErr } = await getSupabase()
     .from("invoices")
     .update({
@@ -184,6 +335,8 @@ export async function syncBoardingBookingInvoice(
     p_booking_id: bookingId,
   });
   if (occupancyErr) throw occupancyErr;
+
+  await reapplyStayDiscount(invoice.id, discountSnapshot, mergedLineSubtotal(merged));
 
   const { data: refreshedInvoice, error: refreshErr } = await getSupabase()
     .from("invoices")

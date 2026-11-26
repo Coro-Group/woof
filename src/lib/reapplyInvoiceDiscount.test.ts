@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeApprovedDiscountLines } from "@/lib/invoiceAdjustmentDiscount";
-import { reapplyInvoiceDiscount, type ReapplyDiscountAdjustment } from "@/lib/reapplyInvoiceDiscount";
+import { reapplyInvoiceDiscount, stayDiscountHistoryNote, type ReapplyDiscountAdjustment } from "@/lib/reapplyInvoiceDiscount";
 import { vatAmountFromGrossInclusive } from "@/lib/vatConfig";
 
 function percentOverride(amount: number, percent = 15): ReapplyDiscountAdjustment {
@@ -47,6 +47,29 @@ describe("reapplyInvoiceDiscount", () => {
     expect(result.discountAmount).toBe(195);
     expect(result.total).toBe(1300 - 195);
     expect(result.discountPct).toBe(15);
+  });
+
+  it("re-applies a 20% MNGT discount after the stay is shortened by 2 nights", () => {
+    const night = 100;
+    const result = reapplyInvoiceDiscount({
+      previousSubtotal: 10 * night,
+      subtotal: 8 * night,
+      discountPct: 20,
+      discountAmount: 200,
+      adjustments: [{
+        id: "mngt",
+        adjustment_type: "discount_override",
+        adjusted_amount: 200,
+        reason: "20% MNGT",
+        approved_by: "MNGT",
+      }],
+      amountPaid: 0,
+      currentStatus: "outstanding",
+    });
+    expect(result.discountPct).toBe(20);
+    expect(result.discountAmount).toBe(160);
+    expect(result.total).toBe(800 - 160);
+    expect(result.adjustmentAmounts).toEqual([{ id: "mngt", adjustedAmount: 160 }]);
   });
 
   it("re-applies 15% after a drop-off line is added", () => {
@@ -134,6 +157,29 @@ describe("reapplyInvoiceDiscount", () => {
     expect(result.discountAmount).toBe(30);
     expect(result.total).toBe(170);
     expect(result.status).toBe("paid");
+  });
+});
+
+describe("stayDiscountHistoryNote", () => {
+  it("records that a percent discount was kept after the stay changed", () => {
+    expect(stayDiscountHistoryNote({
+      previousDiscountAmount: 200,
+      previousDiscountPct: 20,
+      nextDiscountAmount: 160,
+    })).toEqual({
+      fieldChanged: "discount_amount",
+      oldValue: "200.00",
+      newValue: "160.00",
+      reason: "Stay dates changed. 20% discount re-applied on the new subtotal.",
+    });
+  });
+
+  it("does not write a history note when the invoice had no discount", () => {
+    expect(stayDiscountHistoryNote({
+      previousDiscountAmount: 0,
+      previousDiscountPct: 0,
+      nextDiscountAmount: 0,
+    })).toBeNull();
   });
 });
 

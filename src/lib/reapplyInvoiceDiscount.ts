@@ -146,3 +146,22 @@ export function reapplyInvoiceDiscount(input: ReapplyInvoiceDiscountInput): Reap
     adjustmentAmounts,
   };
 }
+
+export function stayDiscountHistoryNote(input: {
+  previousDiscountAmount: number;
+  previousDiscountPct: number;
+  nextDiscountAmount: number;
+}): { fieldChanged: "discount_amount"; oldValue: string; newValue: string; reason: string } | null {
+  const previous = roundMoney2(Math.max(0, input.previousDiscountAmount || 0));
+  const next = roundMoney2(Math.max(0, input.nextDiscountAmount || 0));
+  const pct = roundMoney2(Math.max(0, input.previousDiscountPct || 0));
+  if (previous <= 0.009 && next <= 0.009 && pct <= 0) return null;
+  const pctLabel = Number.isInteger(pct) ? String(pct) : pct.toFixed(2);
+  const kind = pct > 0 ? `${pctLabel}% discount` : "Fixed discount";
+  return {
+    fieldChanged: "discount_amount",
+    oldValue: previous.toFixed(2),
+    newValue: next.toFixed(2),
+    reason: `Stay dates changed. ${kind} re-applied on the new subtotal.`,
+  };
+}

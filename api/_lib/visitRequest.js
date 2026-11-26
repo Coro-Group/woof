@@ -50,6 +50,9 @@ export function parseVisitRequest(body) {
   const phone = normalizePhoneE164(b.phone);
   if (!/^\+[1-9]\d{7,14}$/.test(phone)) return { ok: false, error: "Please enter a valid WhatsApp number." };
 
+  const email = clean(b.email, 150).toLowerCase();
+  if (email && (email.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return { ok: false, error: "Please enter a valid email address." };
+
   const petName = clean(b.petName ?? b.dogName, 100);
   if (petName.length > 100) return { ok: false, error: "Your dog's name is too long." };
 
@@ -71,6 +74,7 @@ export function parseVisitRequest(body) {
     ok: true,
     value: {
       source,
+      email: email || null,
       contactName,
       phone,
       petName: petName || null,

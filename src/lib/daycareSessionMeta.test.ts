@@ -27,6 +27,10 @@ describe("daycareSessionMeta", () => {
     expect(parseDaycareBillingPath("Dog size: Medium", null)).toBe("single");
   });
 
+  it("parseDaycareBillingPath keeps Daycare & Train separate from a full day", () => {
+    expect(parseDaycareBillingPath("BILLING_PATH:train", null)).toBe("train");
+  });
+
   it("parseDaycareBillingPath prefers package when package_id set", () => {
     expect(parseDaycareBillingPath("BILLING_PATH:hourly", "pkg-1")).toBe("package");
   });

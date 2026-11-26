@@ -1,4 +1,4 @@
-export type DaycareBillingPath = "single" | "hourly";
+export type DaycareBillingPath = "single" | "hourly" | "train";
 
 export const BILLING_PATH_PREFIX = "BILLING_PATH:";
 export const HOURLY_INVOICED_PREFIX = "HOURLY_INVOICED:";
@@ -36,6 +36,7 @@ export function parseDaycareBillingPath(
   if (!marker) return "single";
   const value = marker.replace(BILLING_PATH_PREFIX, "").trim();
   if (value === "hourly") return "hourly";
+  if (value === "train") return "train";
   return "single";
 }
 
@@ -115,14 +116,16 @@ export function enrichDaycareSessionInvoiceMap(
   for (const session of sessions) {
     const invoiceId = primaryMap.get(session.id);
     if (!invoiceId) continue;
-    if (parseDaycareBillingPath(session.notes, session.package_id ?? null) !== "single") continue;
-    singleDayInvoiceByOwnerDate.set(`${session.owner_id}:${session.session_date}`, invoiceId);
+    const path = parseDaycareBillingPath(session.notes, session.package_id ?? null);
+    if (path !== "single" && path !== "train") continue;
+    singleDayInvoiceByOwnerDate.set(`${session.owner_id}:${session.session_date}:${path}`, invoiceId);
   }
 
   for (const session of sessions) {
     if (map.has(session.id)) continue;
-    if (parseDaycareBillingPath(session.notes, session.package_id ?? null) !== "single") continue;
-    const invoiceId = singleDayInvoiceByOwnerDate.get(`${session.owner_id}:${session.session_date}`);
+    const path = parseDaycareBillingPath(session.notes, session.package_id ?? null);
+    if (path !== "single" && path !== "train") continue;
+    const invoiceId = singleDayInvoiceByOwnerDate.get(`${session.owner_id}:${session.session_date}:${path}`);
     if (invoiceId) map.set(session.id, invoiceId);
   }
 
@@ -162,7 +165,8 @@ export function isSingleDayInvoiceMissing(
   invoiceIdByServiceId: Map<string, string>,
 ): boolean {
   if (!session.checkedIn) return false;
-  if (parseDaycareBillingPath(session.notes, session.packageId) !== "single") return false;
+  const path = parseDaycareBillingPath(session.notes, session.packageId);
+  if (path !== "single" && path !== "train") return false;
   return !resolveDaycareSessionInvoiceId(session.sessionId, session.notes, invoiceIdByServiceId);
 }
 

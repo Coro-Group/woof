@@ -84,7 +84,7 @@ export function buildDaycareTags(input: {
   todayDate: string;
   checkedIn: boolean;
   packageId: string | null;
-  billingPath?: "single" | "hourly" | "package";
+  billingPath?: "single" | "hourly" | "package" | "train";
   hasInvoice?: boolean;
   /** True when the session is linked to a draft invoice (hours not yet entered). */
   hasDraftInvoice?: boolean;
@@ -112,6 +112,8 @@ export function buildDaycareTags(input: {
     } else {
       tags.push({ key: "hourly", label: "Hourly · Pending invoice", tone: "warning" });
     }
+  } else if (input.billingPath === "train") {
+    tags.push({ key: "daycare_train", label: "Daycare & Train", tone: "default" });
   } else if (input.packageId || input.billingPath === "package") {
     tags.push({ key: "package", label: "Package", tone: "default" });
   } else {

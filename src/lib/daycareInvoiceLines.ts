@@ -31,6 +31,30 @@ function petNameFor(petId: string, pets: DaycareInvoicePet[]): string {
   return pets.find((pet) => pet.id === petId)?.name ?? "Pet";
 }
 
+/** Flat per-dog rate on the Live Rate Card. Gross, VAT-inclusive, same as other daycare prices. */
+export const DAYCARE_TRAIN_PRICING_KEY = "daycare_and_train";
+export const DAYCARE_TRAIN_LABEL = "Daycare & Train";
+export const DAYCARE_TRAIN_DEFAULT_AED = 155;
+
+export function buildDaycareTrainLineItems(args: {
+  petIds: string[];
+  pets: DaycareInvoicePet[];
+  sessionDate: string;
+  unitPrice: number;
+}): DaycareInvoiceLineItem[] {
+  const { petIds, pets, sessionDate, unitPrice } = args;
+  if (petIds.length === 0 || unitPrice <= 0) return [];
+  const dateLabel = formatSessionDate(sessionDate);
+  return petIds.map((petId) => ({
+    description: `${DAYCARE_TRAIN_LABEL} — ${petNameFor(petId, pets)} — ${dateLabel}`,
+    quantity: 1,
+    unitPrice,
+    pricingKey: DAYCARE_TRAIN_PRICING_KEY,
+    serviceType: "daycare",
+    preserveUnitPrice: true,
+  }));
+}
+
 export function buildDaycareSingleDayLineItems(args: {
   petIds: string[];
   pets: DaycareInvoicePet[];

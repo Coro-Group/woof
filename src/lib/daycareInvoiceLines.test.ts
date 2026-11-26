@@ -4,6 +4,7 @@ import { buildPriceMap } from "@/lib/servicePricing";
 import {
   buildDaycareHourlyLineItems,
   buildDaycareSingleDayLineItems,
+  buildDaycareTrainLineItems,
 } from "./daycareInvoiceLines";
 
 describe("daycareInvoiceLines", () => {
@@ -32,6 +33,25 @@ describe("daycareInvoiceLines", () => {
       serviceType: "daycare",
     });
     expect(lines[1].description).toBe("Buddy — Daycare full day — 27 May 2026");
+  });
+
+  it("bills Daycare & Train at the per-dog rate with its own line name", () => {
+    const lines = buildDaycareTrainLineItems({
+      petIds: ["pet-a"],
+      pets: [{ id: "pet-a", name: "Rocky" }],
+      sessionDate: "2026-11-26",
+      unitPrice: 155,
+    });
+    expect(lines).toEqual([
+      {
+        description: "Daycare & Train — Rocky — 26 Nov 2026",
+        quantity: 1,
+        unitPrice: 155,
+        pricingKey: "daycare_and_train",
+        serviceType: "daycare",
+        preserveUnitPrice: true,
+      },
+    ]);
   });
 
   it("builds per-pet hourly lines with hours in description", () => {

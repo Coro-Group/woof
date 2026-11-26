@@ -1,6 +1,7 @@
 export const CANONICAL_PRICING_KEYS: Array<{ key: string; label: string; category: string }> = [
   { key: "registration_member", label: "Registration fee", category: "membership" },
   { key: "daycare_single_day", label: "Daycare 1 dog (single day)", category: "daycare" },
+  { key: "daycare_and_train:*:*:*", label: "Daycare & Train", category: "daycare" },
   { key: "daycare_2_dogs", label: "Daycare 2 dogs (single day)", category: "daycare" },
   { key: "daycare_3_dogs", label: "Daycare 3 dogs (single day)", category: "daycare" },
   {

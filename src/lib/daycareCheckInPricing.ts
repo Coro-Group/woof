@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  DAYCARE_TRAIN_DEFAULT_AED,
+  DAYCARE_TRAIN_PRICING_KEY,
+} from "@/lib/daycareInvoiceLines";
+import {
   DAYCARE_HOURLY_UNIT_KEY,
   DAYCARE_SINGLE_DAY_PRICING_KEYS,
 } from "@/lib/servicePricing";
@@ -11,11 +15,14 @@ type PricingTableRow = { key: string; amount_aed: number };
 export async function fetchDaycareCheckInPriceRows(
   supabase: SupabaseClient,
 ): Promise<PricingTableRow[]> {
-  const rateCardKeys = [...DAYCARE_SINGLE_DAY_PRICING_KEYS];
+  const rateCardKeys = [...DAYCARE_SINGLE_DAY_PRICING_KEYS, DAYCARE_TRAIN_PRICING_KEY];
 
-  const [singleRpc, hourlyRpc, pricingRes] = await Promise.all([
+  const [singleRpc, hourlyRpc, trainRpc, pricingRes] = await Promise.all([
     supabase.rpc("resolve_woof_service_rate", { p_service_code: "daycare_full_day" }),
     supabase.rpc("resolve_woof_service_rate", { p_service_code: "daycare_hourly" }),
+    supabase.rpc("resolve_woof_service_rate", {
+      p_service_code: "daycare_and_train" as "daycare_full_day",
+    }),
     // `pricing` table is live on the project; not yet in generated TS types.
     supabase.from("pricing" as never).select("key, amount_aed").in("key", rateCardKeys as never),
   ]);
@@ -43,6 +50,13 @@ export async function fetchDaycareCheckInPriceRows(
   if (!byKey.has(DAYCARE_HOURLY_UNIT_KEY) && hourlyFromRpc > 0) {
     byKey.set(DAYCARE_HOURLY_UNIT_KEY, hourlyFromRpc);
   }
+
+  const trainFromRpc = trainRpc.error
+    ? 0
+    : Number((trainRpc.data as { amount_aed: number }[] | null)?.[0]?.amount_aed ?? 0);
+  const trainFromCard = byKey.get(DAYCARE_TRAIN_PRICING_KEY) ?? 0;
+  const trainAmount = trainFromRpc > 0 ? trainFromRpc : trainFromCard > 0 ? trainFromCard : DAYCARE_TRAIN_DEFAULT_AED;
+  byKey.set(DAYCARE_TRAIN_PRICING_KEY, trainAmount);
 
   return Array.from(byKey.entries()).map(([key, amount_aed]) => ({ key, amount_aed }));
 }

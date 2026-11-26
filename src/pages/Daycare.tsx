@@ -18,7 +18,11 @@ import {
   daycareGroupPricing,
 } from "@/lib/servicePricing";
 import { fetchDaycareCheckInPriceRows } from "@/lib/daycareCheckInPricing";
-import { buildDaycareSingleDayLineItems } from "@/lib/daycareInvoiceLines";
+import {
+  DAYCARE_TRAIN_PRICING_KEY,
+  buildDaycareSingleDayLineItems,
+  buildDaycareTrainLineItems,
+} from "@/lib/daycareInvoiceLines";
 import {
   complimentaryCreditIdFromChoice,
   complimentaryDaycareChoiceValue,
@@ -692,12 +696,19 @@ function PlannerTab() {
     () => selectedPetIds.filter((id) => (billingChoiceByPet[id] ?? "hourly") === "hourly"),
     [selectedPetIds, billingChoiceByPet],
   );
+  const trainPetIds = useMemo(
+    () => selectedPetIds.filter((id) => (billingChoiceByPet[id] ?? "hourly") === "train"),
+    [selectedPetIds, billingChoiceByPet],
+  );
   const singleDayCount = singleDayPetIds.length;
   const hourlyCount = hourlyPetIds.length;
-  /** Pets checked in on single-day billing (immediate invoice at check-in). */
-  const immediateInvoicePetCount = singleDayCount;
-  /** Pets physically checking in on single-day or hourly (drives transport capacity). */
-  const physicalInvoicePetCount = singleDayCount + hourlyCount;
+  const trainCount = trainPetIds.length;
+  const trainUnitPrice = daycarePriceMap.get(DAYCARE_TRAIN_PRICING_KEY) ?? 0;
+  const trainTotal = trainCount * trainUnitPrice;
+  /** Pets checked in on single-day or Daycare & Train billing (immediate invoice at check-in). */
+  const immediateInvoicePetCount = singleDayCount + trainCount;
+  /** Pets physically checking in on single-day, Daycare & Train, or hourly (drives transport capacity). */
+  const physicalInvoicePetCount = singleDayCount + hourlyCount + trainCount;
 
   const singleDayRatePreview = useMemo(
     () => daycareGroupPricing(singleDayCount, daycarePriceMap),
@@ -706,6 +717,7 @@ function PlannerTab() {
   const singleDayPricingInvalid =
     singleDayCount > 0 &&
     (singleDayRatePreview.total <= 0 || !singleDayRatePreview.pricingKey);
+  const trainPricingInvalid = trainCount > 0 && trainUnitPrice <= 0;
   const transportRate = useMemo(() => {
     const key = transportPricingKey(checkInDraft.transport_zone);
     return transportPricingRows.find((r) => r.key === key)?.amount_aed ?? 0;
@@ -716,7 +728,7 @@ function PlannerTab() {
     : 0;
   const previewTransportTotal = transportRate * previewTransportQty * transportTrips;
   const immediateInvoiceSubtotalPreview =
-    singleDayRatePreview.total + previewTransportTotal;
+    singleDayRatePreview.total + trainTotal + previewTransportTotal;
   const { data: discountPreview, isLoading: discountPreviewLoading } = useQuery<{
     discount_pct: number;
     discount_aed: number;
@@ -782,6 +794,7 @@ function PlannerTab() {
         if (
           prevChoice === "single" ||
           prevChoice === "hourly" ||
+          prevChoice === "train" ||
           usable.some((pkg) => pkg.id === prevChoice)
         ) {
           next[petId] = prevChoice;
@@ -860,6 +873,10 @@ function PlannerTab() {
       );
       return;
     }
+    if (trainPricingInvalid) {
+      toast.error("Daycare & Train rate is missing. Check Settings → Pricing.");
+      return;
+    }
 
     if (
       (checkInDraft.pickup_used || checkInDraft.dropoff_used) &&
@@ -894,15 +911,18 @@ function PlannerTab() {
           ) ?? null
         : null;
       const isHourlyBilling = choice === "hourly";
+      const isTrainBilling = choice === "train";
       const chosenPackageId =
-        complimentaryCredit || choice === "single" || isHourlyBilling ? null : choice;
+        complimentaryCredit || choice === "single" || isHourlyBilling || isTrainBilling ? null : choice;
       const chosenCredit = chosenPackageId ? packages?.find((pkg) => pkg.id === chosenPackageId) : null;
       const billingPath =
         !chosenPackageId && choice === "single"
           ? "single"
           : !chosenPackageId && isHourlyBilling
             ? "hourly"
-            : null;
+            : !chosenPackageId && isTrainBilling
+              ? "train"
+              : null;
 
       try {
         const session = await addDay.mutateAsync({
@@ -977,9 +997,11 @@ function PlannerTab() {
       ...singleDayPetIds.filter((id) => sessionsCreated[id]),
       ...fallbackSingleIds,
     ];
+    const okTrainIds = trainPetIds.filter((id) => sessionsCreated[id]);
     const okCreditIds = successfullyCreditCovered.filter((id) => sessionsCreated[id]);
     const okComplimentaryIds = successfullyComplimentary.filter((id) => sessionsCreated[id]);
-    const invoicedPetTotal = okSingleIds.length + okCreditIds.length + okComplimentaryIds.length;
+    const invoicedPetTotal =
+      okSingleIds.length + okTrainIds.length + okCreditIds.length + okComplimentaryIds.length;
 
     if (invoicedPetTotal > 0) {
       const zoneLabel = transportZoneLabel(checkInDraft.transport_zone);
@@ -1004,6 +1026,20 @@ function PlannerTab() {
             pets: petRows,
             sessionDate: checkInDraft.session_date,
             prices: daycarePriceMap,
+          }),
+        );
+      }
+      if (okTrainIds.length > 0) {
+        const petRows = okTrainIds.map((id) => ({
+          id,
+          name: pets?.find((p) => p.id === id)?.name ?? "Pet",
+        }));
+        lineItems.push(
+          ...buildDaycareTrainLineItems({
+            petIds: okTrainIds,
+            pets: petRows,
+            sessionDate: checkInDraft.session_date,
+            unitPrice: trainUnitPrice,
           }),
         );
       }
@@ -1064,7 +1100,9 @@ function PlannerTab() {
 
       const referencePetId =
         selectedPetIds.find(
-          (id) => sessionsCreated[id] && (okSingleIds.includes(id) || okComplimentaryIds.includes(id)),
+          (id) =>
+            sessionsCreated[id] &&
+            (okSingleIds.includes(id) || okTrainIds.includes(id) || okComplimentaryIds.includes(id)),
         ) ?? selectedPetIds.find((id) => sessionsCreated[id]);
       const referenceSessionId = referencePetId ? sessionsCreated[referencePetId] : null;
 
@@ -1098,7 +1136,7 @@ function PlannerTab() {
           }
 
           // Link sibling single-day sessions to the same invoice (primary uses service_id).
-          const siblingPetIds = okSingleIds.filter(
+          const siblingPetIds = [...okSingleIds, ...okTrainIds].filter(
             (petId) => sessionsCreated[petId] && sessionsCreated[petId] !== referenceSessionId,
           );
           if (siblingPetIds.length > 0) {
@@ -1408,6 +1446,9 @@ function PlannerTab() {
                                 <SelectContent>
                                   <SelectItem value="hourly">Hourly (invoice at checkout)</SelectItem>
                                   <SelectItem value="single">Single day (invoice now)</SelectItem>
+                                  <SelectItem value="train" data-testid={`daycare-billing-train-${pet.id}`}>
+                                    Daycare &amp; Train (invoice now)
+                                  </SelectItem>
                                   {usablePackages.map((pkg) => (
                                     <SelectItem key={pkg.id} value={pkg.id}>
                                       {daycarePackageCreditLabel(pkg)}
@@ -1587,6 +1628,19 @@ function PlannerTab() {
                           Single-day rate is missing or invalid — check the Live Rate Card before check-in.
                         </p>
                       )}
+                      {trainCount > 0 && (
+                        <div className="flex items-center justify-between text-sm">
+                          <span>
+                            Daycare &amp; Train ({trainCount} dog{trainCount === 1 ? "" : "s"} × {formatAed(trainUnitPrice)})
+                          </span>
+                          <span>{formatAed(trainTotal)}</span>
+                        </div>
+                      )}
+                      {trainPricingInvalid && (
+                        <p className="text-sm text-destructive">
+                          Daycare &amp; Train rate is missing — check Settings → Pricing before check-in.
+                        </p>
+                      )}
                       {(checkInDraft.pickup_used || checkInDraft.dropoff_used) && (
                         <div className="flex items-center justify-between text-sm text-muted-foreground">
                           <span>
@@ -1672,8 +1726,8 @@ function PlannerTab() {
                   onChange={(e) => setCheckInDraft((prev) => ({ ...prev, remark: e.target.value }))}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Hourly billing is invoiced later from Operations. Single-day billing creates a finalized invoice
-                  immediately. Package credits are recorded without a charge line.
+                  Hourly billing is invoiced later from Operations. Single-day and Daycare &amp; Train billing
+                  create an invoice immediately. Package credits are recorded without a charge line.
                 </p>
               </div>
 
@@ -1697,7 +1751,7 @@ function PlannerTab() {
               <Button
                 data-testid="daycare-create-session-btn"
                 onClick={handleCheckInSelected}
-                disabled={isSubmittingCheckIn || selectedPetIds.length === 0 || singleDayPricingInvalid}
+                disabled={isSubmittingCheckIn || selectedPetIds.length === 0 || singleDayPricingInvalid || trainPricingInvalid}
               >
                 {isSubmittingCheckIn && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Check in {selectedPetIds.length > 0 ? `${selectedPetIds.length} pet${selectedPetIds.length !== 1 ? "s" : ""}` : "selected pets"}

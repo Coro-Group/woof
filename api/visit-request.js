@@ -73,7 +73,8 @@ export default async function handler(req, res, deps = {}) {
     pet_name: v.petName,
     interest: v.interest,
     client_note: v.notes,
-    source: "website",
+    source: v.source,
+    email: v.email,
     source_page: v.sourcePage,
   });
   if (insertError) return json(res, 503, { ok: false, error: UNAVAILABLE });

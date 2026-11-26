@@ -38,6 +38,17 @@ const STATUS_STYLE: Record<VisitRequestStatus, string> = {
   closed: "bg-muted text-muted-foreground",
 };
 
+/** Where the request was sent from: the coro.ae planner, or the brand page's own domain. */
+function cameVia(r: { source?: string | null; source_page?: string | null }) {
+  if (r.source === "coro.ae") return "via coro.ae";
+  try {
+    const host = r.source_page ? new URL(r.source_page).host.replace(/^www\./, "") : "";
+    return host ? `via ${host}` : "via the website";
+  } catch {
+    return "via the website";
+  }
+}
+
 function matches(filter: Filter, r: VisitRequest) {
   if (filter === "all") return true;
   if (filter === "open") return r.status === "new";
@@ -88,7 +99,7 @@ function RequestRow({ r }: { r: VisitRequest }) {
               <Badge className="bg-red-600 text-white hover:bg-red-600">{visitRequestWaitingLabel(minutes)}</Badge>
             ) : null}
           </div>
-          <div className="text-sm text-muted-foreground">{r.phone} · requested {when(r.created_at)}</div>
+          <div className="text-sm text-muted-foreground">{r.phone}{r.email ? <> · <a href={`mailto:${r.email}`} className="underline">{r.email}</a></> : null} · {cameVia(r)} · requested {when(r.created_at)}</div>
         </div>
         <div className="flex flex-wrap gap-2">
           {waHref ? (

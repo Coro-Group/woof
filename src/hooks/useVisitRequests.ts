@@ -15,6 +15,8 @@ export interface VisitRequest {
   pet_name: string | null;
   interest: VisitRequestInterest | null;
   client_note: string | null;
+  email: string | null;
+  source_page: string | null;
   source: string;
   status: VisitRequestStatus;
   staff_note: string | null;
@@ -44,7 +46,7 @@ export function useVisitRequests() {
     queryFn: async (): Promise<VisitRequest[]> => {
       const { data, error } = await db
         .from("visit_requests")
-        .select("id, contact_name, phone, pet_name, interest, client_note, source, status, staff_note, handled_by, contacted_at, created_at")
+        .select("id, contact_name, phone, email, pet_name, interest, client_note, source, source_page, status, staff_note, handled_by, contacted_at, created_at")
         .order("created_at", { ascending: false })
         .limit(500);
       if (error) throw error;

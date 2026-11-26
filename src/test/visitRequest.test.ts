@@ -20,7 +20,7 @@ describe("parseVisitRequest", () => {
   it("cleans the fields and normalises the phone", () => {
     expect(parseVisitRequest(good)).toEqual({
       ok: true,
-      value: { contactName: "Sara Khan", phone: "+971501234567", petName: "Luna", interest: null, notes: null, sourcePage: null },
+      value: { source: "website", email: null, contactName: "Sara Khan", phone: "+971501234567", petName: "Luna", interest: null, notes: null, sourcePage: null },
     });
     expect(parseVisitRequest({ ...good, petName: undefined, dogName: "Rex" }).value.petName).toBe("Rex");
   });
@@ -125,7 +125,7 @@ describe("POST /api/visit-request", () => {
     await handler({ method: "POST", headers: {}, body: JSON.stringify({ ...good, interest: "boarding", page: "/" }) }, res, { service });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ ok: true });
-    expect(inserted).toEqual([{ contact_name: "Sara Khan", phone: "+971501234567", pet_name: "Luna", interest: "boarding", client_note: null, source: "website", source_page: "/" }]);
+    expect(inserted).toEqual([{ contact_name: "Sara Khan", phone: "+971501234567", pet_name: "Luna", interest: "boarding", client_note: null, source: "website", email: null, source_page: "/" }]);
   });
 
   it("answers a filled honeypot with success without saving", async () => {
@@ -144,5 +144,21 @@ describe("visitWhatsAppUrl", () => {
     expect(decodeURIComponent(url!.split("text=")[1])).toContain("Hi Sara");
     expect(decodeURIComponent(url!.split("text=")[1])).toContain("free assessment and daycare trial");
     expect(visitWhatsAppUrl({ phone: "", contact_name: "A", pet_name: null })).toBeNull();
+  });
+});
+
+describe("request source", () => {
+  it("records coro.ae when the coro.ae planner sends it, else the brand's own website", () => {
+    expect(parseVisitRequest({ ...good, source: "coro.ae" }).value.source).toBe("coro.ae");
+    expect(parseVisitRequest({ ...good, source: "elsewhere" }).value.source).toBe("website");
+    expect(parseVisitRequest(good).value.source).toBe("website");
+  });
+});
+
+describe("request email", () => {
+  it("keeps a valid email, lowercased, and refuses a broken one", () => {
+    expect(parseVisitRequest({ ...good, email: " Sara@Example.COM " }).value.email).toBe("sara@example.com");
+    expect(parseVisitRequest({ ...good, email: "" }).value.email).toBeNull();
+    expect(parseVisitRequest({ ...good, email: "not-an-email" }).ok).toBe(false);
   });
 });

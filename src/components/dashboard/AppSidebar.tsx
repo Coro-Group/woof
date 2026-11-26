@@ -22,6 +22,9 @@ import {
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { useCurrentStaffName } from "@/hooks/useCurrentStaffName";
+import { useVisitRequests } from "@/hooks/useVisitRequests";
+import { todoVisitRequests } from "@/lib/visitRequestAlerts";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
@@ -49,6 +52,9 @@ const settingsItems = [
 const AppSidebar = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const { staff, isLoading } = useCurrentStaffName();
+  const { data: visitRows = [] } = useVisitRequests();
+  const visitTodoCount = !isLoading && staff ? todoVisitRequests(visitRows).length : 0;
 
   return (
     <aside className="flex h-screen w-60 flex-col bg-sidebar text-sidebar-foreground shrink-0">
@@ -71,7 +77,15 @@ const AppSidebar = () => {
             activeClassName="bg-sidebar-accent text-sidebar-primary"
           >
             <item.icon className="h-4 w-4 shrink-0" />
-            <span>{item.label}</span>
+            <span className="flex-1">{item.label}</span>
+            {item.path === "/visit-requests" && visitTodoCount > 0 ? (
+              <span
+                data-testid="visit-request-sidebar-count"
+                className="rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white"
+              >
+                {visitTodoCount}
+              </span>
+            ) : null}
           </NavLink>
         ))}
 

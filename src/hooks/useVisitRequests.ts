@@ -50,7 +50,7 @@ export function useVisitRequests() {
       if (error) throw error;
       return (data ?? []) as VisitRequest[];
     },
-    refetchInterval: 60_000,
+    refetchInterval: 30_000,
   });
 }
 

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { format, formatDistanceToNow } from "date-fns";
 import { CalendarCheck, Inbox, MessageCircle, Phone, X } from "lucide-react";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ import {
   type VisitRequestStatus,
 } from "@/hooks/useVisitRequests";
 import { visitWhatsAppUrl } from "@/lib/visitRequestWhatsApp";
+import { isVisitRequestWaitingTooLong, visitRequestWaitingLabel, visitRequestWaitingMinutes } from "@/lib/visitRequestAlerts";
 
 type Filter = "open" | VisitRequestStatus | "all";
 
@@ -66,8 +68,15 @@ function RequestRow({ r }: { r: VisitRequest }) {
     if (r.status === "new") setStatus("contacted");
   };
 
+  const waiting = r.status === "new" && isVisitRequestWaitingTooLong(r.created_at);
+  const minutes = visitRequestWaitingMinutes(r.created_at);
+
   return (
-    <li className="rounded-xl border bg-card p-4 space-y-3" data-testid="visit-requests-row">
+    <li
+      id={`visit-request-${r.id}`}
+      className={`rounded-xl border bg-card p-4 space-y-3 ${waiting ? "border-red-500 bg-red-50" : ""}`}
+      data-testid="visit-requests-row"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -75,6 +84,9 @@ function RequestRow({ r }: { r: VisitRequest }) {
             {r.pet_name ? <span className="text-muted-foreground">with {r.pet_name}</span> : null}
             <Badge variant="secondary" className={STATUS_STYLE[r.status]}>{VISIT_STATUS_LABEL[r.status]}</Badge>
             {r.interest ? <Badge variant="outline">{VISIT_INTEREST_LABEL[r.interest]}</Badge> : null}
+            {waiting ? (
+              <Badge className="bg-red-600 text-white hover:bg-red-600">{visitRequestWaitingLabel(minutes)}</Badge>
+            ) : null}
           </div>
           <div className="text-sm text-muted-foreground">{r.phone} · requested {when(r.created_at)}</div>
         </div>
@@ -130,6 +142,22 @@ function RequestRow({ r }: { r: VisitRequest }) {
 export default function VisitRequestsPage() {
   const { data = [], isLoading, error } = useVisitRequests();
   const [filter, setFilter] = useState<Filter>("open");
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get("request");
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!focusId) return;
+    const row = data.find((r) => r.id === focusId);
+    if (row?.status === "new") setFilter("open");
+    const el = document.getElementById(`visit-request-${focusId}`);
+    el?.scrollIntoView({ block: "center" });
+  }, [data, focusId]);
 
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { open: 0, new: 0, contacted: 0, booked: 0, closed: 0, all: data.length };

@@ -9,7 +9,7 @@
 export const config = { maxDuration: 300 };
 
 import { createClient } from "@supabase/supabase-js";
-import { HUB_PREFIX, SYNC_DAYS, addDays, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
+import { HUB_PREFIX, SYNC_DAYS, addDays, aeKickAuthorized, buildHubSync, hubConfigured, hubEnabled, hubPost } from "./_lib/transportHub.js";
 
 function json(res, status, body) {
   res.status(status).setHeader("Content-Type", "application/json");
@@ -301,6 +301,19 @@ async function autoSync(token) {
   return { ok: true, runs };
 }
 
+/**
+ * AE asking for a sync now (op "kick"): dispatch changed one of our dogs on AE. Only
+ * queues the same database-kicked sync any Woof change does, so one runs at a time and
+ * the 10-minute retry covers a kick that does not get through.
+ */
+async function aeKick(req) {
+  if (!aeKickAuthorized(req.headers?.authorization)) throw new HttpError(401, "Not authorised");
+  requireSwitchedOn();
+  const { error } = await serviceDb().rpc("transport_hub_autosync_kick", { p_count: true });
+  if (error) throw new HttpError(500, error.message);
+  return { ok: true, queued: true };
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
@@ -314,6 +327,7 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return json(res, 405, { error: "GET or POST only" });
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
     if (body.op === "auto") return json(res, 200, await autoSync(body.token));
+    if (body.op === "kick") return json(res, 200, await aeKick(req));
     const { db, staff } = await caller(req);
     requireSwitchedOn();
     if (body.op === "quote") return json(res, 200, await quote(db, body));

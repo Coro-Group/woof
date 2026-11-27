@@ -12,6 +12,8 @@
 // Switched OFF unless TRANSPORT_HUB_ENABLED is exactly "true". Nothing runs on a schedule.
 // buildHubSync() is pure so it is tested alone.
 
+import { timingSafeEqual } from "node:crypto";
+
 export const HUB_PREFIX = "woof:";
 export const SYNC_DAYS = 56;
 export const WOOF_SITE = "AQ";
@@ -22,6 +24,22 @@ export function hubEnabled(env = process.env) {
 
 export function hubConfigured(env = process.env) {
   return !!env.AE_TRANSPORT_PARTNER_URL && !!env.AE_TRANSPORT_PARTNER_SECRET;
+}
+
+/**
+ * AE asking Woof to sync now (op "kick", 27 Nov 2026): dispatch changed one of our dogs
+ * there — its pin, a new transport profile — and Woof only learns it from a sync's
+ * answer. Bearer AE_TRANSPORT_PARTNER_SECRET, the secret Woof already sends AE.
+ * Constant-time compare; no secret set → nobody.
+ */
+export function aeKickAuthorized(authorization, env = process.env) {
+  const secret = env.AE_TRANSPORT_PARTNER_SECRET;
+  if (!secret) return false;
+  const header = String(authorization ?? "");
+  if (!header.startsWith("Bearer ")) return false;
+  const given = Buffer.from(header.slice(7));
+  const want = Buffer.from(secret);
+  return given.length === want.length && timingSafeEqual(given, want);
 }
 
 export async function hubPost(body, env = process.env, fetchImpl = fetch) {
